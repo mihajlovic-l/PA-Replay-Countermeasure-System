@@ -1,0 +1,32 @@
+# Generated data artifacts -- all reproducible by re-running src/*.py against the
+# ASVspoof datasets. Also, manifests/ and splits/ embed absolute local filesystem
+# paths (E:\ASVspoof data\..., see src/config.py), which are meaningless outside
+# this machine -- another reason not to version them.
+manifests/
+splits/
+features/
+models/
+results/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# Environments (this project's venv lives outside the repo, in a sibling folder,
+# but ignore the common local names anyway in case that ever changes)
+.venv/
+venv/
+env/
+
+# Editor / tool-local state (machine-specific, e.g. hardcoded interpreter paths)
+.vscode/
+.claude/
+.idea/
+
+# OS junk
+Thumbs.db
+.DS_Store

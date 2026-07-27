@@ -1,0 +1,694 @@
+# PA Replay Countermeasure System — Full Thesis Project Plan & Context
+
+This file is a detailed carry-over of a planning conversation. It's written to be read
+cold in a new chat, so it includes reasoning and numbers, not just conclusions — the
+point is to lose as little context as possible when switching chats.
+
+---
+
+## 1. The project decision, and how we got here
+
+Thesis topic: **Voice Biometrics & Anti-Spoofing**, specifically a countermeasure (CM)
+system that distinguishes bonafide (live human) speech from replay-spoofed speech — i.e.
+detecting when a recording of someone's voice is played back through a speaker to try to
+fool a voice-based system.
+
+Two other directions were explicitly considered and rejected:
+- **ASVspoof 5 (2024) / synthetic-speech-deepfake framing**: rejected because ASVspoof 5
+  has no dedicated physical-replay track anymore (LA and DF got merged into a single
+  TTS/VC/adversarial-attack track). Pursuing it would mean reframing the whole thesis
+  around synthesis-artifact detection (SSL front-ends like wav2vec2/XLS-R + AASIST
+  backend) instead of the "speaker/mic fingerprint" story, which is heavier
+  compute-wise and less demo-friendly (no "play my own recorded voice into the mic and
+  watch it get flagged" moment).
+- **Training only on ASVspoof 2019 PA and evaluating only on it too**: rejected in favor
+  of using 2019 for train/dev and reserving **2021 PA eval** as the real held-out test,
+  because 2021 contains genuinely real re-recorded replay audio (see section 3), which is
+  a much stronger empirical claim than reporting results only on simulated data.
+
+Also discussed and partly planned as bonus/extension features (not the core thesis, add
+only if time allows): a live demo combining anti-spoofing + keyword spotting ("Unlock"
+passphrase via pretrained ASR) + lightweight speaker verification (self-enrolled voice
+print + cosine similarity), wrapped in a Gradio/Streamlit UI with `sounddevice` for mic
+capture. Full detail in section 6, phase 9.
+
+---
+
+## 2. Where everything lives
+
+- Dataset root: `E:\ASVspoof data\` (kept separate from code/venv because C: drive was
+  nearly full — see section 7 for the disk situation and how it was resolved).
+  - `E:\ASVspoof data\ASVspoof2019_PA\`
+  - `E:\ASVspoof data\ASVspoof2021_PA_eval\`
+- Code/project root: `C:\Users\Luka\OneDrive\Радна површина\PythonProject\PA Replay Countermeasure System\` (this file's location).
+- Python environment: `C:\Users\Luka\OneDrive\Радна површина\PythonProject\OG\.venv`
+  (Python 3.11) — this is the venv being reused for this thesis rather than creating a
+  fresh one, since it already had numpy/scipy/pandas/matplotlib/torch etc. See section 7
+  for exactly what's installed and a critical gotcha with this venv's `pip.exe`.
+
+---
+
+## 3. Dataset structure — full breakdown
+
+### 3.1 ASVspoof2019_PA
+
+Top-level layout (from `README.txt` / `README.PA.txt` inside the dataset):
+```
+ASVspoof2019_PA/
+  asvspoof2019_evaluation_plan.pdf
+  README.txt
+  PA/
+    README.PA.txt
+    ASVspoof2019_PA_train/flac/          -- 54,000 files (PA_T_*.flac)
+    ASVspoof2019_PA_dev/flac/            -- 33,534 files (PA_D_*.flac)
+    ASVspoof2019_PA_eval/flac/           -- 153,522 files (PA_E_*.flac)
+    ASVspoof2019_PA_cm_protocols/        -- CM (countermeasure) labels
+      ASVspoof2019.PA.cm.train.trn.txt   -- 54,000 lines
+      ASVspoof2019.PA.cm.dev.trl.txt     -- 29,700 lines
+      ASVspoof2019.PA.cm.eval.trl.txt    -- 134,730 lines
+    ASVspoof2019_PA_asv_protocols/       -- ASV (speaker verification) protocols
+      ASVspoof2019.PA.asv.{dev,eval}.{male,female}.{trn,trl}.txt
+    ASVspoof2019_PA_asv_scores/          -- baseline ASV system scores (t-DCF eval)
+```
+
+**Why dev/eval flac counts don't match CM protocol line counts** — this took some
+digging and matters a lot: `PA_dev/flac` has 33,534 files but the CM dev protocol only
+lists 29,700. Same story for eval: 153,522 files vs 134,730 CM lines. The difference
+(3,834 for dev, 18,792 for eval — 22,626 total) is **ASV-enrollment-only recordings**:
+extra bonafide utterances used to build speaker voiceprints for the ASV task, which are
+listed in the `.trn` enrollment files, not the CM protocol at all. This was verified
+directly: summing the comma-separated file lists inside
+`ASVspoof2019.PA.asv.{dev,eval}.{male,female}.trn.txt` gives exactly 3,834 and 18,792,
+which reconciles precisely with the flac-count vs CM-protocol-line-count gap. Train has
+no such gap (54,000 flac = 54,000 CM lines) because train has no separate ASV
+enrollment set.
+
+**CM protocol format** (`SPEAKER_ID AUDIO_FILE_NAME ENVIRONMENT_ID ATTACK_ID KEY`):
+- `SPEAKER_ID`: e.g. `PA_0079`
+- `ENVIRONMENT_ID`: a triplet like `aaa`, encoding (S, R, D_s) each as a/b/c:
+  - S = room size: a=2-5m², b=5-10m², c=10-20m²
+  - R = T60 reverberation time: a=50-200ms, b=200-600ms, c=600-1000ms
+  - D_s = talker-to-ASV-mic distance: a=10-50cm, b=50-100cm, c=100-150cm
+- `ATTACK_ID`: a duple like `AA`, encoding (attacker-to-talker distance, replay device
+  quality), or `-` for bonafide. Replay device quality bins (perfect/high/low) are
+  defined by occupied bandwidth / lower-bound frequency / linearity specs in the README.
+- `KEY`: `bonafide` or `spoof`.
+- Checked and confirmed: the **same 9 attack-ID combinations (AA through CC) appear in
+  train, dev, AND eval** — unlike the LA track (TTS/VC), PA doesn't have an
+  unknown-attack-algorithm generalization test built in, because the attack space here is
+  a physical parameter grid (distance × device quality), not different synthesis
+  algorithms. All combinations were simulated in every split.
+- Bonafide/spoof counts confirmed by direct count:
+  - train: 5,400 bonafide / 48,600 spoof
+  - dev: 5,400 bonafide / 24,300 spoof
+  - eval: 18,090 bonafide / 116,640 spoof
+  - Combined CM pool: 28,890 bonafide / 189,540 spoof → **~6.6:1 spoof:bonafide
+    imbalance**.
+
+**ASV protocol format**:
+- Enrollment (`.trn`): `SPEAKER_ID_ENV FILE1,FILE2,...` (e.g.
+  `PA_0073_aaa PA_D_A000001,PA_D_A000002,...`) — a speaker enrolled per environment
+  condition, using ~19 files each.
+- Trial (`.trl`): `CLAIMED_SPEAKER_ID TEST_FILE ENV_ID ATTACK_ID KEY` where KEY is
+  `target` (genuine claimed speaker), `nontarget` (different real speaker, impostor), or
+  `spoof` (a spoofing attack played against that speaker's enrollment).
+- Baseline ASV scores in `ASVspoof2019_PA_asv_scores/*.scores.txt`: format
+  `CM_KEY ASV_KEY SCORE` — precomputed similarity scores from a baseline ASV system, for
+  t-DCF computation if the ASV extension gets built.
+
+**CM vs ASV — the conceptual distinction** (came up as its own question, worth keeping
+verbatim):
+- CM = "is this audio bonafide or spoofed", full stop, no identity involved. This is the
+  actual thesis task.
+- ASV = "does this voice match the identity claiming to speak", which needs enrollment
+  (a voiceprint built from known-genuine recordings) then trial scoring against it.
+- Both exist together in this dataset because the real-world threat model the challenge
+  targets is a full voice-login pipeline (CM gate + ASV match), scored jointly via
+  t-DCF. For this thesis: CM first, ASV only as an optional later extension (reusing the
+  enrollment-file concept for the bonus self-enrolled speaker verification feature too —
+  same idea, just self-recorded instead of dataset-provided).
+
+Audio format for all of 2019 PA: FLAC, 16kHz, 16-bit.
+
+Sizes on disk (measured): `ASVspoof2019_PA` folder = **18GB**.
+
+### 3.2 ASVspoof2021_PA_eval
+
+Layout — split across 7 parts because of file-size limits on the distribution:
+```
+ASVspoof2021_PA_eval/
+  ASVspoof2021_PA_eval_part00/ASVspoof2021_PA_eval/flac/   -- 150,000 files
+  ASVspoof2021_PA_eval_part01/ASVspoof2021_PA_eval/flac/   -- 150,000 files
+  ASVspoof2021_PA_eval_part02/ASVspoof2021_PA_eval/flac/   -- 150,000 files
+  ASVspoof2021_PA_eval_part03/ASVspoof2021_PA_eval/flac/   -- 150,000 files
+  ASVspoof2021_PA_eval_part04/ASVspoof2021_PA_eval/flac/   -- 150,000 files
+  ASVspoof2021_PA_eval_part05/ASVspoof2021_PA_eval/flac/   -- 125,745 files
+  ASVspoof2021_PA_eval_part06/ASVspoof2021_PA_eval/
+    flac/                                                  -- 67,365 files
+    ASVspoof2021.PA.cm.eval.trl.txt   -- filenames ONLY, no labels (943,110 lines)
+    README.PA.txt
+    LICENSE.txt
+  PA-keys-full/keys/PA/                -- downloaded SEPARATELY from Zenodo audio
+    README.txt
+    CM/
+      trial_metadata.txt               -- the REAL labels, 943,110 lines
+      CQCC-GMM/score.txt                -- official baseline scores (943,110 lines)
+      LFCC-GMM/score.txt
+      LFCC-LCNN/score.txt
+      RawNet2/score.txt
+    ASV/
+      trial_metadata.txt                -- 2,508,570 lines (ASV trial protocol)
+      ASVTorch_Kaldi/score.txt          -- official ASV baseline scores
+    PA-C012-{eval,hidden1,hidden2,prog}.npy   -- precomputed C0/C1/C2 cepstral coeffs
+```
+Total flac files across all 7 parts = **943,110**, exactly matching the 943,110 lines in
+both the bare-filename protocol file and the real `trial_metadata.txt` — confirmed by
+direct count, nothing missing or extra.
+
+**Why the audio-side protocol file has no labels**: `ASVspoof2021.PA.cm.eval.trl.txt`
+(inside part06) is deliberately just a filename list, so nobody training a model can
+accidentally peek at the answer key. The actual ground truth (`bonafide`/`spoof`) lives
+only in `PA-keys-full/keys/PA/CM/trial_metadata.txt`, which was released separately
+(from `asvspoof.org`, not the Zenodo audio host) for challenge-integrity reasons. Always
+join on filename against this file to get real labels.
+
+**`trial_metadata.txt` format**: `SPEAKER FILE R{room} M{mic} d{dist} r m s c LABEL
+TRIM_FLAG PARTITION` — e.g. `PA_0010 PA_E_1000001 R3 M3 d4 r1 m1 s4 c4 spoof notrim eval`.
+This is a genuinely different/richer code scheme than 2019's `aaa`-style triplets,
+because it's describing **real recording setups** (real rooms, real mics, real replay
+devices), not simulation parameters.
+
+**Partition column matters** — checked the actual distribution, it's not homogeneous:
+- `eval` = 721,332 rows — the official scored/leaderboard subset. **Use this one for the
+  headline reported EER.**
+- `progress` = 87,048 rows — an early subset released during the live challenge.
+- `hidden` = 134,730 rows — a held-out portion not used in main scoring.
+- Confirmed all four official baseline `score.txt` files (CQCC-GMM, LFCC-GMM, LFCC-LCNN,
+  RawNet2) cover the full 943,110 rows (all partitions), so filtering to `partition ==
+  "eval"` afterward is safe and stays apples-to-apples with the baselines.
+- Trim-flag column: `notrim` = 875,745, `trim` = 67,365 (minor detail, not critical).
+- ASV `trial_metadata.txt` (separate file, 2,508,570 rows) has its own partition split:
+  `eval` = 1,975,104, `hidden` = 253,530, `progress` = 279,936.
+
+**What the baseline `score.txt` files and folder names actually mean** (this was asked
+explicitly, keeping the full answer):
+- `CQCC-GMM`: Constant-Q Cepstral Coefficients (CQT-derived cepstral features) → Gaussian
+  Mixture Model classifier. Classical, pre-deep-learning baseline.
+- `LFCC-GMM`: Linear-Frequency Cepstral Coefficients (linear rather than mel/constant-Q
+  spacing) → GMM. Another classical baseline.
+- `LFCC-LCNN`: same LFCC features, but fed into a Light CNN (deep learning) instead of a
+  GMM — shows the classical→deep jump on identical features.
+- `RawNet2`: end-to-end deep network consuming raw waveform directly, no hand-crafted
+  features — the most modern of the four.
+- Each `score.txt` is one row per file: `FILENAME SCORE` (a continuous score, higher
+  usually meaning more bonafide-like, sign/scale conventions differ slightly per system
+  — check when computing EER against them).
+- `ASV/ASVTorch_Kaldi/score.txt`: baseline ASV system (Kaldi-based) scores, only needed
+  if the ASV/t-DCF extension gets built.
+- `PA-C012-*.npy`: precomputed low-order (C0/C1/C2) cepstral coefficients, optional,
+  not required.
+
+Audio format: FLAC, 16kHz, 16-bit, same as 2019.
+
+Size on disk (measured): `ASVspoof2021_PA_eval` folder = **45GB**.
+
+### 3.3 The simulated-vs-real distinction, explained mechanically
+
+This came up as its own detailed question and is central to the thesis narrative, so the
+full mechanical explanation is worth keeping:
+
+**2019 PA is simulated**: nobody played a real speaker through a real mic in a real
+room. Room-acoustics simulation software (README cites Roomsimove / a MATLAB "shoebox"
+room model, plus a swept-sine measurement technique for device response) mathematically
+convolves clean VCTK studio speech with:
+- a simulated room impulse response for a given room size (S) and reverberation time
+  (R=T60),
+- a simulated loudspeaker frequency response of a given quality tier (Q: perfect/high/
+  low, defined by bandwidth/lowest-frequency/linearity numbers),
+- specified talker-to-mic and attacker-to-talker distances.
+
+Each parameter is discretized into 3 categorical levels (a/b/c), giving a **controlled,
+reproducible factorial grid** — which is exactly why the same attack-ID grid (AA-CC)
+shows up identically in train/dev/eval (see 3.1). There's no real acoustic surprise here:
+no mic self-noise character, no real room echo flutter/resonances outside the shoebox
+model, no real speaker nonlinearity/doppler, etc.
+
+**2021 PA eval is real**: someone physically played the speech through an actual
+loudspeaker in an actual room and re-recorded it with an actual microphone, varying real
+rooms/mic placements/replay devices. The richer `R{room} M{mic} d{dist} r m s c` coding
+scheme (vs 2019's `aaa` triplets) reflects this — it's describing real setups, not
+simulation dial positions. This is the first point in the ASVspoof PA lineage where the
+"speaker diaphragm leaves a fingerprint that CQT can see" story is backed by genuinely
+physical replay rather than a physics-inspired simulation of it.
+
+**Should simulated-only training data be a worry?** Conclusion reached: yes a little,
+but it's a known, accepted, and actually *useful* limitation, not a flaw:
+- It's literally the setup the ASVspoof organizers designed on purpose (train 2019,
+  generalization-test 2021), so "does a model trained on simulated replay generalize to
+  real replay" is the intended research question, not something introduced by mistake.
+- Honest thesis framing: report EER on 2019 dev (in-domain/simulated) AND on 2021 eval
+  (out-of-domain/real) side by side. A gap between the two is itself a legitimate,
+  citable, interesting result — not a failure.
+- If the 2021 number is meaningfully worse than the 2019 number, that mirrors the
+  documented outcome from the actual ASVspoof 2021 challenge, and is discussable/citable
+  as such, not something to be defensive about in a thesis defense.
+
+---
+
+## 4. Reshuffling 2019 PA — decision and reasoning
+
+Question raised: since 2021 PA eval is huge (943,110 files) and will serve as the sole
+held-out test set, is it safe/useful to fold 2019's own eval split into training, since it
+won't be needed as eval anymore?
+
+**Conclusion**: yes, but do it properly (resplit by speaker), and there's a better,
+free bonus discovered while investigating this:
+
+1. Concatenate ALL of 2019's CM-labeled data (train+dev+eval, 218,430 rows total) **plus**
+   the 22,626 ASV-enrollment-only bonafide files identified in section 3.1 (these were
+   sitting completely unused by the CM task — zero evaluation-contamination risk from
+   including them, since they were never part of any CM eval to begin with).
+   - Before enrichment: 28,890 bonafide / 189,540 spoof (~6.6:1).
+   - After adding the 22,626 enrollment files (all bonafide): 51,516 bonafide / 189,540
+     spoof (~3.7:1) — meaningfully better balance, for free.
+2. Resplit the combined pool by **speaker** (not by row) — e.g.
+   `sklearn.model_selection.GroupShuffleSplit(groups=df.speaker_id)`, roughly 75/25 of
+   speakers into train/dev. Speaker-disjointness matters: without it the model could
+   learn to recognize individual voices instead of replay artifacts, which is what the
+   original split was protecting against and shouldn't be thrown away casually.
+3. 2019 no longer needs its own separate "eval" split at all — **2021 PA eval becomes the
+   only true held-out test set**, touched exactly once, at the very end.
+4. Residual imbalance (3.7:1) handled via `class_weight="balanced"` (SVM/RF) and
+   `pos_weight` in `BCEWithLogitsLoss` (LCNN) — not via further oversampling/undersampling
+   on top of the enrichment, unless dev EER later indicates it's actually necessary.
+
+**What NOT to do**: don't just dump 2019 eval's spoof files into training while leaving
+dev as-is — that creates a mismatch where dev no longer represents the same speaker/attack
+distribution as what the model trained on, undermining the validity of hyperparameter
+decisions made by watching dev EER.
+
+---
+
+## 5. Dev vs eval — how to actually use them
+
+- **Train**: fit model parameters.
+- **Dev** ("development"/validation): used *during* development — tune hyperparameters,
+  pick decision threshold, decide when to stop training, compare architectures. Can be
+  looked at repeatedly and reacted to.
+- **Eval** (final test): touched **once**, at the very end, to report the final number.
+  Tuning anything based on eval results contaminates it and invalidates it as a
+  generalization estimate — flagged as the single most common methodological mistake in
+  student ML projects, and something examiners specifically probe for.
+
+Applied to this project: 2019 train (resplit, enriched) → fit models. 2019 dev (resplit)
+→ tune feature settings/threshold/epochs/architecture choices. 2021 PA eval
+(`partition=="eval"` subset) → the one true final number, computed once.
+
+---
+
+## 6. Full roadmap
+
+### Feature combination decision (with reasoning, not just the pick)
+
+| Track | Front-end | Backend | Role |
+|---|---|---|---|
+| Baseline | MFCC (mean/std-pooled stats vector) | SVM + Random Forest | classical, cheap, deliberately weak on replay |
+| Main system | CQT log-power spectrogram ("CQTgram") | LCNN (Light CNN, Max-Feature-Map activations) | the thesis's real contribution |
+| Optional 3rd point (only if time allows) | CQCC | GMM or SVM | exact reproduction of the official `CQCC-GMM` baseline |
+
+Why LCNN over ResNet-18: LCNN (Max-Feature-Map activation instead of ReLU) is the
+literature-standard lightweight architecture for this exact task — won ASVspoof 2017 PA,
+top-performing on 2019 PA, and is literally one of the four official 2021 baselines
+(`LFCC-LCNN`). Using it gives two clean comparison axes for free: same backend/different
+front-end (this project's CQT-LCNN vs the official LFCC-LCNN baseline, isolating the
+effect of CQT specifically) and same front-end family/different backend (LFCC-GMM vs
+LFCC-LCNN, showing the classical→deep jump). ResNet-18 would work too but has no
+PA-specific pedigree and is heavier to train on a 4GB-VRAM GPU (see section 7) than LCNN.
+
+Why MFCC as the deliberately weak baseline (not CQCC): MFCC's mel filterbank compresses
+exactly the high-frequency region where loudspeaker/microphone electromechanical
+artifacts live, so MFCC→SVM is *expected* to underperform — and that gap becomes the
+thesis's central empirical argument ("perceptually-motivated features miss the
+fingerprint; constant-Q features find it"). CQCC would blur that contrast since it's
+already CQT-based, so it's kept as a stretch-goal third data point rather than the main
+baseline. Also worth noting practically: `librosa` has no built-in CQCC (unlike MFCC and
+CQT, which it does have), so CQCC requires a third-party implementation or a port — a
+real time-cost reason to keep it optional.
+
+Explicitly NOT pursued, but worth a paragraph in the Related Work chapter about why not:
+raw-waveform end-to-end (RawNet2-style) and SSL front-ends (wav2vec2/XLS-R) are current
+state-of-the-art but need much heavier compute than a 2-month solo thesis on a 4GB GPU
+can comfortably absorb — natural "future work" material, ties back to the ASVspoof5/SSL
+discussion in section 1.
+
+### Phase 0 — Environment & project skeleton
+```
+project/
+├── data/                        # already exists on E: (ASVspoof2019_PA, ASVspoof2021_PA_eval)
+├── manifests/                   # csv/parquet file lists — output of Phase 1
+├── features/                    # cached .npy/.h5 feature arrays — output of Phase 4
+├── splits/                      # resplit train/dev csvs — output of Phase 2
+├── models/                      # saved .pkl (SVM/RF) and .pt (LCNN) checkpoints
+├── results/                     # EER tables, plots, score files
+├── src/
+│   ├── config.py                # single source of truth for all paths/params
+│   ├── manifest.py               # Phase 1
+│   ├── resplit.py                # Phase 2
+│   ├── features.py               # Phase 4
+│   ├── datasets.py               # torch Dataset classes
+│   ├── models_classical.py       # SVM/RF wrappers
+│   ├── models_lcnn.py            # LCNN architecture
+│   ├── train.py
+│   ├── evaluate.py               # EER, DET, confusion matrix, F1 etc
+│   └── demo/                     # Phase 9
+└── notebooks/                    # EDA, plotting, scratch work
+```
+`config.py` should hold `DATA_ROOT = Path("E:/ASVspoof data")` and every
+feature/hyperparameter (sample rate, n_mfcc, CQT bins, fixed frame length, batch size) —
+never hardcode these inline.
+
+Libraries needed in `OG/.venv` (see section 7 for exact current state and the install
+command to use): `numpy pandas librosa soundfile scikit-learn torch torchaudio matplotlib
+seaborn tqdm joblib` now; `faster-whisper sounddevice gradio` later for Phase 9.
+
+### Phase 1 — Data loading & manifest building
+Goal: turn the scattered protocol `.txt` files into one clean pandas table per dataset.
+
+1.1 — Parse 2019 PA CM protocols (5 columns, whitespace-separated):
+```python
+def load_2019_cm_protocol(path, split, flac_dir):
+    cols = ["speaker_id", "filename", "env_id", "attack_id", "label"]
+    df = pd.read_csv(path, sep=" ", names=cols)
+    df["filepath"] = df["filename"].apply(lambda f: flac_dir / f"{f}.flac")
+    df["split"] = split          # "train" / "dev" / "eval"
+    df["year"] = 2019
+    return df
+```
+Run for train/dev/eval, `pd.concat`.
+
+1.2 — Parse the 22,626 ASV-enrollment-only files (`.trn` files, format
+`SPEAKER_ID FILE1,FILE2,...`): explode the comma-separated lists, mark every one
+`label="bonafide"`, `source="asv_enrollment"`. Keep as a separate DataFrame until Phase 2.
+
+1.3 — Parse 2021: the audio-side protocol (part06) is filenames only — the real labels
+are in `PA-keys-full/keys/PA/CM/trial_metadata.txt` (11 columns as described in section
+3.2). Build a filename→path lookup dict once across all 7 parts' `flac/` folders (files
+are split across parts, so this lookup is needed before resolving `filepath`).
+
+1.4 — Filter 2021 to `partition == "eval"` for the final reported number (see section 3.2
+for why — `progress`/`hidden` are additional material, not the headline subset).
+
+1.5 — Keep `env_id`/`attack_id` (2019) and `R/M/d/r/m/s/c` (2021) columns in the manifest
+even though they're not training signal — costs nothing to keep, and becomes the basis
+for an EER-by-condition breakdown later (Phase 7) for almost no extra work.
+
+### Phase 2 — Reshuffling (full reasoning already in section 4)
+Save result as `splits/train_2019.csv` / `splits/dev_2019.csv`, never touch the raw
+protocol files again downstream.
+
+### Phase 3 — Exploratory data analysis
+- Class balance bar chart, before/after Phase 2 enrichment.
+- Duration histogram (use `soundfile.info()` for cheap duration without full decode).
+- Waveform + spectrogram plot, one bonafide vs one spoof example side by side.
+- Speaker count/gender balance per split.
+- Sanity-check: listen to 5-10 files per label to rule out a label-swap bug (flagged
+  early on as an easy place to introduce a bug given the 2019/2021 protocol formats
+  differ).
+
+### Phase 4 — DSP feature extraction
+
+4.1 — Shared preprocessing: all files already 16kHz/16-bit, no resampling needed. 20-30ms
+frames, 50% overlap, Hamming window (implement once by hand in week 1 to demonstrate DSP
+understanding, then switch to library calls for actual pipeline speed via
+`librosa.feature.mfcc` / `librosa.cqt`, which handle framing/windowing internally via
+`n_fft`/`hop_length`). Fixed-length handling: pick a fixed frame count (e.g. ~400 CQT
+frames ≈ 4 seconds), pad by repeating if shorter, crop (random crop while training,
+center crop for eval) if longer.
+
+4.2 — MFCC pipeline (for SVM/RF), pooled to a fixed-length stats vector since classical
+models need fixed-length input:
+```python
+mfcc = librosa.feature.mfcc(y=y, sr=16000, n_mfcc=20, n_fft=512, hop_length=160)
+delta1 = librosa.feature.delta(mfcc)
+delta2 = librosa.feature.delta(mfcc, order=2)
+feat = np.concatenate([mfcc, delta1, delta2], axis=0)   # (60, T)
+vec = np.concatenate([feat.mean(axis=1), feat.std(axis=1)])   # fixed 120-dim vector
+```
+
+4.3 — CQT pipeline (for LCNN):
+```python
+C = librosa.cqt(y=y, sr=16000, hop_length=256, n_bins=96, bins_per_octave=12)
+cqtgram = librosa.amplitude_to_db(np.abs(C))    # log-power CQT spectrogram
+cqtgram = pad_or_crop(cqtgram, T=400)            # fixed (96, 400) "image"
+```
+
+4.4 — Caching strategy, with the disk-space math behind it: extracting features once and
+caching to disk is essential given 943,110 files in 2021 alone — decoding FLAC every
+epoch would be far too slow. But the storage format matters a lot:
+- MFCC pooled vectors are tiny (~480 bytes/file) regardless of float32/uint8 — caching
+  the full enriched training pool (241,056 files) costs only ~116MB. Not a concern.
+- CQT spectrograms at a representative 96×400 shape:
+  - float32 (naive default): ~150KB/file → **~34.5GB** for the 241,056-file training
+    pool. Too large relative to available disk (see section 7 for exact free-space
+    numbers at the time this was calculated).
+  - **uint8, quantized dB values** (same idea as storing any grayscale image — no
+    meaningful loss for training purposes since the CNN already treats this as an image):
+    ~37.5KB/file → **~8.4GB** for the training pool. This is the recommended approach.
+  - uint8 + smaller shape (64×250): ~16KB/file → **~3.6GB**. Even safer margin if needed.
+- **Do NOT cache CQT features for the 2021 eval set at all.** Even quantized, 721,332
+  files (the `partition=="eval"` subset) at 96×400 uint8 would be ~27GB — a large chunk
+  of whatever's free on the data drive, for a set that's only passed through ONCE (final
+  scoring), not across many training epochs. Instead: extract → score → discard per
+  batch in a streaming loop, persisting only the tiny per-file score output (a few MB
+  total), never the spectrograms themselves.
+
+### Phase 5 — Classical ML baseline
+1. Load pooled MFCC vectors + labels from `splits/train_2019.csv`.
+2. `StandardScaler` fit on train only, applied to dev (avoid leaking dev statistics).
+3. `SVC(kernel="rbf", class_weight="balanced", probability=True)` — probability output
+   needed for EER, which needs a continuous score not a hard label. Grid-search
+   `C`/`gamma` on dev only.
+4. Also fit `RandomForestClassifier(class_weight="balanced")` — gives feature
+   importances nearly for free (nice extra plot: "which MFCC coefficients matter most").
+5. Save both with `joblib.dump`.
+
+### Phase 6 — Deep learning main system (highest-risk phase, budget slack)
+LCNN architecture — Max-Feature-Map is the non-standard piece, implemented as a custom
+activation:
+```python
+class MFM(nn.Module):
+    def forward(self, x):
+        a, b = torch.chunk(x, 2, dim=1)
+        return torch.max(a, b)
+
+class LCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 64, 5, padding=2), MFM(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 96, 3, padding=1), MFM(),
+            nn.BatchNorm2d(48),
+            nn.MaxPool2d(2),
+            # ... continue per the LCNN paper's block pattern ...
+        )
+        self.head = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(C, 1))
+    def forward(self, x):
+        return self.head(self.net(x)).squeeze(-1)   # raw logit
+```
+(Follow the original LCNN paper's exact layer sizes rather than improvising — it's a
+known-good recipe.) Training essentials: `BCEWithLogitsLoss(pos_weight=...)` set from the
+train-split class ratio; Adam, lr ~1e-3 to 1e-4, `ReduceLROnPlateau` scheduled on **dev
+EER, not dev loss** (they don't always move together under class imbalance); batch size
+limited by the 4GB GPU (start at 32, adjust — see section 7); 10-20 epochs realistic;
+checkpoint on best dev EER. Optional but standard-in-literature and cheap: light
+augmentation (additive noise, time-shift, occasional codec/compression simulation via
+RawBoost-style perturbation) to help bridge the simulated→real domain gap discussed in
+section 3.3.
+
+### Phase 7 — Evaluation
+7.1 — EER (primary metric, computed identically for every system compared):
+```python
+def compute_eer(bonafide_scores, spoof_scores):
+    scores = np.concatenate([bonafide_scores, spoof_scores])
+    labels = np.concatenate([np.ones_like(bonafide_scores), np.zeros_like(spoof_scores)])
+    fpr, tpr, thresholds = roc_curve(labels, scores)
+    fnr = 1 - tpr
+    idx = np.nanargmin(np.abs(fnr - fpr))
+    eer = (fnr[idx] + fpr[idx]) / 2
+    return eer, thresholds[idx]
+```
+Report on: (a) resplit 2019 dev — tuning/sanity number, (b) 2021 PA eval
+(`partition=="eval"` only) — the headline number.
+
+7.2 — Confusion matrix at the EER threshold (state explicitly in the thesis that this
+specific operating point was chosen deliberately — it's a design decision).
+
+7.3 — Precision/Recall/F1/Accuracy/ROC-AUC at that same threshold, as the more intuitive
+supplementary numbers (official baselines are usually only reported in EER, so frame
+these as supplementary, EER as primary).
+
+7.4 — Baseline comparison table — the strongest chart available: compute EER the same
+way on the four official `score.txt` files, joined against `trial_metadata.txt` labels,
+filtered to `partition=="eval"`, alongside this project's own MFCC-SVM / CQT-LCNN
+numbers:
+
+| System | EER (2021 PA eval) |
+|---|---|
+| CQCC-GMM (official) | ... |
+| LFCC-GMM (official) | ... |
+| LFCC-LCNN (official) | ... |
+| RawNet2 (official) | ... |
+| MFCC-SVM (this project, baseline) | ... |
+| **CQT-LCNN (this project, main)** | ... |
+
+7.5 — Condition breakdown using the metadata kept from Phase 1.5: EER split by room
+size, mic distance, replay device quality (a `groupby` + bar chart) — turns "does the
+model survive real physical replay conditions" into a specific, evidenced answer instead
+of one aggregate number.
+
+### Phase 8 — ASV extension (optional, only after CM is solid)
+1. Reuse ASV `.trn` enrollment files (2019) / `ASV/trial_metadata.txt` (2021) already
+   parsed in Phase 1.
+2. Build speaker voiceprints from enrollment utterances (mean MFCC embedding for
+   consistency with the existing pipeline, or a pretrained x-vector/ECAPA embedding for
+   stronger separation).
+3. Score trials by cosine similarity/PLDA against the claimed speaker's voiceprint.
+4. t-DCF (if wanted): combines CM and ASV miss/false-alarm rates with cost/prior weights
+   into one scalar. The official baseline ASV scores exist specifically so this project's
+   CM scores can be plugged into that formula without building an ASV system from
+   scratch. Treat as "if week 7 has slack," not core-path.
+
+### Phase 9 — Bonus real-time features + live demo (last 1-2 weeks, strict timebox)
+1. **Keyword spotting**: `faster-whisper` tiny/base model, transcribe a short recorded
+   clip, normalize (`lower().strip()`) and compare to the passphrase. No training needed.
+2. **Speaker verification (self-enrollment)**: record the passphrase 5-10 times, extract
+   MFCC (reuse Phase 4.2 code), average into a voiceprint vector, cosine-similarity
+   threshold at inference. Upgrade option if time allows: swap in a pretrained embedding
+   (`resemblyzer` or SpeechBrain ECAPA-TDNN) for cleaner separation — still zero training.
+3. **Live demo wiring**: `sounddevice.rec()` captures mic audio → CQT-LCNN CM model gate
+   (spoof/bonafide) → if bonafide, Whisper KWS → if passphrase matches, cosine-similarity
+   speaker check → grant/deny. Wrap in Gradio (`gr.Blocks`, `gr.Audio(source="microphone")`
+   input, colored `gr.Textbox` output) — under 50 lines.
+4. Calibrate the live threshold separately from the dataset EER threshold — the laptop's
+   own mic won't match the dataset's recording conditions, expect to nudge this by ear
+   during rehearsal.
+
+### Thesis chapter mapping
+Introduction (biometric security, replay threat) → Related Work (ASVspoof
+2015/2017/2019/2021/5 evolution, section 1's reasoning) → DSP Theory (framing,
+windowing, MFCC vs CQT math, why CQT suits replay) → Data (dataset description, the
+simulated-vs-real distinction from section 3.3, the resplit rationale from section 4) →
+Methodology (SVM/RF + LCNN architecture, training setup) → Results (EER table vs
+official baselines, confusion matrix, F1/precision/recall, condition breakdown, DET
+curves) → Discussion (2019→2021 domain-shift gap, what it means) → Extensions (ASV/
+t-DCF if done, KWS+SV+demo) → Conclusion & Future Work (SSL front-ends, ASVspoof5,
+real-time robustness).
+
+---
+
+## 7. Environment & disk state (as resolved during planning)
+
+### Venv contents (`PythonProject\OG\.venv`, Python 3.11), checked directly
+Already installed before this thesis started: `torch`, `torchvision`, `numpy`, `scipy`,
+`pandas`, `matplotlib`, `sympy`, `networkx`, `scikit-image`, plus Jupyter/notebook stack,
+plus unrelated geo-course packages (`rasterio`, `geopandas`, `pyproj` — leftover from a
+geoinformatics course, harmless to ignore).
+
+**Missing, still to install**: `librosa`, `scikit-learn`, `soundfile`, `gradio` or
+`streamlit`, `faster-whisper`, `sounddevice`. (`torchaudio` is already present via the
+CUDA torch install below.)
+
+**GPU / CUDA — resolved**: laptop GPU is an **NVIDIA GeForce GTX 1650 (4GB VRAM)**,
+driver 555.99 supporting up to CUDA 12.5 (confirmed via `nvidia-smi`). Originally the
+venv had `torch 2.8.0+cpu` (CPU-only build, `torch.cuda.is_available()` was `False`) —
+not a hardware/driver problem, just the wrong wheel had been installed. Fixed by
+reinstalling with:
+```
+python.exe -m pip uninstall -y torch torchvision torchaudio
+python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+Result, confirmed directly: `torch 2.5.1+cu121`, `torch.cuda.is_available() == True`,
+`torch.cuda.get_device_name(0) == "NVIDIA GeForce GTX 1650"`. **Keep LCNN training batch
+sizes modest (≤32) given the 4GB VRAM ceiling.**
+
+**Critical gotcha, confirmed directly — always remember this**: `OG\.venv\Scripts\pip.exe`
+is broken. It has a stale hardcoded interpreter path from whenever this venv was
+copied/relocated, and silently redirects to a **completely unrelated venv**:
+`E:\Fakultet\3. godina RUS\geoinformatika\PythonProject\.venv` (a Geoinformatika course
+project). This was discovered the hard way: an initial attempt to reinstall CUDA torch via
+`OG\.venv\Scripts\pip.exe` actually uninstalled/reinstalled torch in that unrelated venv
+instead, with no error or warning. The fix and the rule going forward: **never invoke
+`Scripts\pip.exe` directly in this venv — always use `Scripts\python.exe -m pip ...`**,
+since the venv's own `python.exe` binary correctly resolves its own site-packages (this
+was verified directly), unlike the separately-generated `pip.exe` launcher script. The
+Geoinformatika venv's accidental CUDA upgrade was deliberately left in place (decided not
+worth reverting) — its torch there is now also `2.5.1+cu121` (was `2.8.0`, presumably
+CPU), with `sympy` correspondingly at `1.13.1` (was `1.14.0`) due to torch's pinned
+dependency. Not expected to cause problems for that course project, but noted here in
+case it ever does.
+
+### Disk cleanup performed
+Starting point: **C: drive had only 6.35GB free (97% full)**, E: had 31.68GB free.
+Investigated a user-reported mismatch (Explorer Properties showed the profile at ~66GB,
+manually summing visible folders in `C:\Users\Luka` only reached ~20GB) — resolved: it
+was `AppData`, which is hidden by default in Explorer and was never included in the
+manual folder-by-folder sum. Direct measurement: `C:\Users\Luka` total = 57GB (after the
+user had already freed ~7-8GB before this was measured), of which `AppData` alone =
+**44-45GB** (Local 35GB + Roaming 8.5GB) — by far the dominant piece.
+
+Cleaned up (all confirmed executed and verified):
+- `pip` cache: 5,869MB (1,508 files) purged via `pip cache purge`.
+- `AppData\Local\Temp`: cleared (excluding the active Claude session's own temp
+  subfolder, so nothing mid-task was disrupted).
+- NVIDIA shader cache (`Local\NVIDIA\DXCache`, `GLCache`, and all of `LocalLow\NVIDIA`):
+  removed — regenerates automatically on next GPU use.
+- `Local\Downloaded Installations`: removed (leftover installer files).
+- Dead torch/tensorflow remnants inside a separate, non-venv global install at
+  `AppData\Roaming\Python\Python311\site-packages`: removed `~orch` (a folder Windows
+  renames to `~name` when it can't fully delete during a failed uninstall — this was the
+  remains of a broken `torch` uninstall), `tensorflow`, `tensorflow-2.20.0.dist-info`,
+  `torch-2.10.0.dist-info`, `torchgen`, `functorch`. (That whole Roaming\Python\Python311
+  folder is a legacy `pip install --user` setup predating the current per-project-venv
+  workflow — the rest of it, e.g. `scipy`/`cv2`/`spacy`/`sklearn`/`numpy` sitting there,
+  was left alone since it wasn't explicitly flagged for removal.)
+- `AppData\Local\MathWorks` (MATLAB per-user data): removed.
+- **Docker Desktop and the WSL Ubuntu distro were deliberately left untouched** — actively
+  used (one container, in constant recent use), so no pruning/compacting was done despite
+  `docker_data.vhdx` being a large (5.7GB) virtual disk that in general doesn't
+  auto-shrink.
+
+**Result, measured directly**: C: went from **6.35GB → 27.56GB free** (~21.2GB freed,
+more than the itemized estimate suggested, likely because the actual Temp folder
+contents were larger than the earlier partial listing had shown). E: unchanged at
+31.68GB free (nothing on that drive was touched).
+
+### Other things flagged during the disk audit but NOT acted on (still there, for later judgment)
+- `miniconda3` (4.9GB) — a separate conda installation, redundant if the venv-per-project
+  workflow is what's actually used going forward.
+- `.julia` (1.5GB) — only relevant if Julia is actually used.
+- Two system-wide Python installs (3.13.5 and 3.11.9) — explained by the user: 3.11 was
+  needed at the time because PyTorch (or possibly TensorFlow) didn't support the newer
+  Python version yet. Small on their own (~150-160MB each), not a real space concern.
+- Java 5 Runtime Environment (2005-era) — flagged as almost certainly unused by anything
+  modern, but not removed.
+- Oracle VirtualBox (234MB installed, but `VirtualBox VMs` folder is empty — no actual VM
+  disk images exist).
+- Various game/app data (Wargaming.net, Steam, Epic Games + Launcher, bakkesmod, Discord,
+  Mediatonic) — left entirely alone, personal-use judgment calls, not flagged as
+  "definitely unused."
+- Bright VPN, WFDownloaderApp, snapdownloader-updater — small, flagged only as
+  "worth confirming you still use these," not removed.
+
+### Dataset sizes on disk (measured directly, for reference)
+`ASVspoof2019_PA` = 18GB, `ASVspoof2021_PA_eval` = 45GB, both on `E:\ASVspoof data\`.
+
+---
+
+## 8. Immediate next action
+
+Install the remaining libraries into `OG\.venv` — **using `python.exe -m pip install
+...`, never `pip.exe` directly** (see the gotcha above) — then begin Phase 1
+(manifest-building code): `librosa scikit-learn soundfile gradio faster-whisper
+sounddevice` (streamlit as an alternative to gradio if preferred; torchaudio is already
+present).
