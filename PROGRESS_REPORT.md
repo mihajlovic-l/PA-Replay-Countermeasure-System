@@ -1,4 +1,4 @@
-# Progress Report — Phases 0 through 3
+# Progress Report — Phases 0 through 4
 
 This is a narrative log of what's actually been done in the repo so far, with the
 numbers that were verified and the bugs that came up along the way. `PROJECT_PLAN.md`
@@ -140,4 +140,125 @@ Outputs:
 
 ---
 
-Next: **Phase 4**, DSP feature extraction (MFCC + CQT), per `PROJECT_PLAN.md` section 6.
+## Phase 4 — DSP feature extraction (`src/features.py`)
+
+### Dataset restructure (prerequisite, done before extraction)
+
+Per instruction, the dataset directory was restructured on E: from `E:\ASVspoof
+data\{ASVspoof2019_PA, ASVspoof2021_PA_eval, ...}` to a cleaner two-level layout:
+`E:\ASVspoof\data\{...same contents...}` and a new sibling `E:\ASVspoof\features\`,
+dedicated to this phase's cache. The local project's own (empty) `features/` folder
+was deleted, and `config.py`'s `FEATURES_DIR` now points at the new E: location
+instead of living under the project root. Rationale: the project directory sits
+inside OneDrive sync scope, and dumping ~241,000 generated cache files there would be
+slow to sync and pointless (fully reproducible); E: already hosts the raw dataset and
+has more free space than C: to begin with.
+
+Consequence that had to be handled: `manifests/*.parquet` and `splits/*.csv` all embed
+**absolute** `filepath` columns pointing at the old `E:\ASVspoof data\...` location.
+After the move those paths were stale, so `src/manifest.py` and `src/resplit.py` were
+both re-run from scratch to regenerate them against the new `E:\ASVspoof\data\...`
+paths. Row counts and the resplit's random assignment were identical to before (same
+`random_state=42`), confirming nothing else was affected.
+
+### A real, large-scale bug: ~46% of the corpus wouldn't decode
+
+While benchmarking extraction speed, `soundfile.read()` started throwing `flac
+decoder lost sync` / `unknown error in flac decoder` on a large fraction of files.
+Quantified properly on a random sample of 500 files from the enriched pool: **232/500
+(46.4%)** failed. This was not file corruption — `file` (the Unix utility) correctly
+identified a failing file's header as a valid FLAC stream with the right sample
+count/rate. The real cause: `soundfile`'s bundled `libsndfile` (1.2.2) has its own
+internal FLAC decoder (not the reference `libFLAC`), and it can't handle whatever
+encoding parameters a large chunk of this corpus was produced with. `librosa.load()`'s
+automatic fallback to `audioread` didn't help either, since there was no `ffmpeg`
+anywhere on this system for `audioread` to fall back to, and installing a from-source
+alternative (`pyflac`) failed to build (no C compiler/CMake available).
+
+**Fix**: installed `imageio-ffmpeg`, a pip package that bundles a portable static
+ffmpeg binary (no admin rights or system install needed). Verified via direct
+subprocess decode that ffmpeg reads the previously-failing file correctly, then
+re-verified against fresh, larger samples with zero failures.
+
+**Design decision**: decode *every* file uniformly through ffmpeg — not a
+"try-soundfile-then-fall-back" hybrid. One consistent decode path for the whole
+corpus is a stronger, simpler methods-section claim than mixing two decoders
+depending on which one happened to work, and avoids any subtle numerical
+inconsistency between them. Cost: ffmpeg subprocess decode is slower per file than
+`soundfile` would have been (~76ms/file just for decode, benchmarked), but this
+turned out to be entirely manageable (see timing below).
+
+This fix is corpus-wide, not 2019-specific — `src/features.py`'s `load_audio()` will
+be reused as-is for the 2021 streaming evaluation in Phase 7.
+
+### Fixed-length CQT handling: resolved in favor of deferring to Phase 6
+
+The plan sketches a fixed CQT frame count (~400 frames) for the LCNN, but also says
+"random crop while training, center crop for eval" — those two are in tension if a
+single crop is baked in once at cache time (there'd be nothing left to randomize
+across epochs). Resolved by **caching each file's CQT at its natural, unpadded,
+uncropped length now**, and deferring the pad/random-crop/center-crop-to-400 logic to
+Phase 6's `Dataset` class, which will operate on these variable-length arrays and
+genuinely re-crop on every epoch during training (real augmentation), while dev/eval
+get a deterministic center crop (reproducible metrics).
+
+Whether to cap the stored length (to bound the rare very-long outlier) was checked
+empirically rather than assumed: a full header-only scan of all 241,056 files (not
+just a sample) found duration `mean=4.53s, median=4.29s, max=17.5s`, with only
+**1,804 files (0.748%) exceeding 10s** and just 117 (0.049%) exceeding 15s. Capping at
+10s would have saved only ~17MB out of ~6.1GB total — negligible. **No cap was
+applied**; every file is cached at its true natural length.
+
+### `src/features.py`
+
+Scope: only the 2019 pool (`train_2019.csv` + `dev_2019.csv`, 241,056 files combined).
+2021 (943,110 files) is deliberately untouched here — its features get extracted
+on-the-fly during Phase 7 evaluation and never cached, per the plan's disk-cost
+reasoning (caching CQT for all 721,332 `partition=="eval"` files would cost ~27GB for
+a set that's only scored once).
+
+Two outputs:
+- **MFCC**: 20 MFCC + delta + delta² (60×T) → mean+std pooled to a fixed **120-dim
+  vector** per file, exactly as sketched in the plan. Cached as **one consolidated
+  parquet** (`E:\ASVspoof\features\mfcc\pooled_mfcc.parquet`) rather than 241,056 tiny
+  files, since the vectors are tiny (~480 bytes each) and a classical model wants a
+  single feature table anyway.
+- **CQT**: log-power CQTgram at 90 bins (see Phase 3's Nyquist-bug note), quantized to
+  **uint8** via `librosa.amplitude_to_db(ref=max, top_db=80)` linearly mapped to
+  [0, 255] — the same convention already used for the EDA plots. Cached as **one
+  `.npy` per file** (`E:\ASVspoof\features\cqt\<filename>.npy`), since ragged
+  variable-length arrays can't stack into one dense file.
+
+Engineering details worth recording:
+- **Resumable by design, and this mattered in practice**: the script checkpoints the
+  MFCC parquet after every 5,000-file chunk, and on startup skips any file whose MFCC
+  row is already checkpointed *and* whose CQT `.npy` already exists. This session hit
+  two unrelated environment crashes while this phase was in progress (once right after
+  the E: drive restructure, once mid-way through writing `features.py`), and the
+  resumable design meant neither crash cost any lost extraction work — a coincidental
+  but real validation of the design choice, not just defensive theatre.
+- Benchmarked before committing to the full run: **~155ms/file** single-threaded
+  (ffmpeg decode + MFCC + CQT combined). Parallelized via `joblib` across 8 of the
+  machine's 12 logical cores (`config.FEATURE_EXTRACTION_N_JOBS`).
+- Failures (if any) get logged to `extraction_failures.csv` and skipped rather than
+  crashing the whole run — moot in the event, since there were none.
+
+### Verified results
+
+Full run completed cleanly: **241,056 / 241,056 files processed, 0 failures**
+(no `extraction_failures.csv` was even created) — the ffmpeg decode fix held at full
+corpus scale, not just in samples.
+
+- `E:\ASVspoof\features\cqt\`: 241,056 `.npy` files, **6.3GB** total (in line with the
+  ~6.1GB estimate). Spot-checked: `(90, T)` uint8 arrays with genuinely varying `T`
+  per file (e.g. 284/268/278 frames across a random sample) and values spanning the
+  full 0–255 range.
+- `E:\ASVspoof\features\mfcc\pooled_mfcc.parquet`: shape `(241056, 127)` — 7 identifier
+  columns (`filename`, `speaker_id`, `label`, `subset`, `env_id`, `attack_id`, `split`)
+  + 120 MFCC feature columns, **171MB**, zero NaNs.
+- Row counts match Phase 2 exactly: `subset` 175,959 train / 65,097 dev; `label`
+  189,540 spoof / 51,516 bonafide.
+
+---
+
+Next: **Phase 5**, the classical MFCC→SVM/RF baseline, per `PROJECT_PLAN.md` section 6.

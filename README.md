@@ -13,8 +13,9 @@ been done so far (with numbers, decisions, and bugs found/fixed) lives in
 
 ## Status
 
-**Phases 0–3 complete** (environment setup, manifest building, speaker-disjoint
-resplitting, EDA). Next up: Phase 4, DSP feature extraction (MFCC + CQT).
+**Phases 0–4 complete** (environment setup, manifest building, speaker-disjoint
+resplitting, EDA, DSP feature extraction). Next up: Phase 5, the classical MFCC→SVM/RF
+baseline.
 
 ## Repo layout
 
@@ -23,12 +24,13 @@ src/
   config.py     -- single source of truth for paths and hyperparameters
   manifest.py   -- Phase 1: raw protocol files -> clean parquet manifests
   resplit.py    -- Phase 2: speaker-disjoint train/dev resplit + ASV-enrollment enrichment
-  eda.py         -- Phase 3: exploratory data analysis, writes plots to EDA/
+  eda.py        -- Phase 3: exploratory data analysis, writes plots to EDA/
+  features.py   -- Phase 4: MFCC + CQT extraction, cached to E:\ASVspoof\features
 EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
 PROJECT_PLAN.md     -- full thesis plan, reasoning, and dataset breakdown
 PROGRESS_REPORT.md  -- detailed log of work completed so far
 
-manifests/, splits/, features/, models/, results/  -- generated artifacts (gitignored;
+manifests/, splits/, models/, results/  -- generated artifacts (gitignored;
   reproducible by re-running the src/ scripts against the dataset)
 ```
 
@@ -37,11 +39,18 @@ manifests/, splits/, features/, models/, results/  -- generated artifacts (gitig
 - Python 3.11 venv, currently a venv shared with another project
   (`OG/.venv`, sibling folder to this one) rather than a fresh one — see
   `PROJECT_PLAN.md` section 7 for why.
-- Dataset paths are configured in `src/config.py` (`DATA_ROOT`) and are currently
-  **absolute local paths** — update that constant if running on a different machine.
+- Dataset lives at `E:\ASVspoof\data\` and the Phase 4 feature cache at
+  `E:\ASVspoof\features\` — both configured in `src/config.py` (`DATA_ROOT`,
+  `FEATURES_DIR`) and currently **absolute local paths** — update those constants if
+  running on a different machine.
+- Audio is decoded via `ffmpeg` (a portable binary bundled through the
+  `imageio-ffmpeg` pip package, not a system install) rather than `soundfile` — see
+  `PROGRESS_REPORT.md` Phase 4 for why (`soundfile`'s bundled `libsndfile` fails to
+  decode ~46% of this corpus outright).
 - Run any phase script as a module from the project root, e.g.:
   ```
   python -m src.manifest
   python -m src.resplit
   python -m src.eda
+  python -m src.features
   ```

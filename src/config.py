@@ -3,11 +3,17 @@ from pathlib import Path
 
 # --- Roots ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_ROOT = Path("E:/ASVspoof data")
+ASVSPOOF_ROOT = Path("E:/ASVspoof")
+DATA_ROOT = ASVSPOOF_ROOT / "data"
+
+# Feature cache lives on E: (not under PROJECT_ROOT) for two reasons: the project
+# directory is inside OneDrive sync scope, and syncing hundreds of thousands of
+# generated cache files would be slow and pointless; and C: has much less free
+# space than E:, which already hosts the raw dataset. See PROGRESS_REPORT.md.
+FEATURES_DIR = ASVSPOOF_ROOT / "features"
 
 MANIFESTS_DIR = PROJECT_ROOT / "manifests"
 SPLITS_DIR = PROJECT_ROOT / "splits"
-FEATURES_DIR = PROJECT_ROOT / "features"
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 
@@ -92,7 +98,23 @@ MFCC_HOP_LENGTH = 160
 CQT_HOP_LENGTH = 256
 CQT_N_BINS = 90
 CQT_BINS_PER_OCTAVE = 12
+# Phase 4 caches each file's CQT at its own natural length, uncapped (verified
+# across all 241,056 files: only 0.75% exceed 10s, and capping saves a negligible
+# ~17MB out of ~6.1GB total -- not worth the extra parameter/edge case). This
+# constant is consumed only in Phase 6's Dataset, which pads short clips and
+# randomly (train) or centrally (dev/eval) crops long ones down to this window.
 CQT_FIXED_FRAMES = 400
+
+# --- Phase 4 feature extraction ---
+# CQT dB -> uint8 quantization floor (matches librosa.amplitude_to_db's top_db
+# default): values are linearly mapped from [-CQT_TOP_DB, 0] dB to [0, 255].
+CQT_TOP_DB = 80.0
+# ~46% of the 2019 corpus fails to decode via soundfile/libsndfile ("flac decoder
+# lost sync") -- confirmed at scale (232/500 sampled), root-caused to a libsndfile
+# FLAC-decoder limitation, not file corruption (raw headers check out fine).
+# Every file is decoded via ffmpeg (through the portable imageio-ffmpeg binary)
+# instead, uniformly, for one consistent decode path across the whole corpus.
+FEATURE_EXTRACTION_N_JOBS = 8  # leave a few of the 12 logical cores free
 
 # --- Training ---
 RANDOM_SEED = 42
