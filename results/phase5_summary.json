@@ -1,0 +1,37 @@
+{
+  "svm_best": {
+    "n_train": 175959,
+    "C": 1.0,
+    "gamma": "0.01",
+    "eer": 0.0921557940965064,
+    "threshold": -0.03957672185269334,
+    "accuracy": 0.9078298539103185,
+    "precision_bonafide": 0.7308154506437768,
+    "recall_bonafide": 0.9078694817658349,
+    "f1_bonafide": 0.8097774396043371,
+    "roc_auc": 0.9695804146949327,
+    "tp_bonafide_accepted": 12771,
+    "fn_bonafide_rejected": 1296,
+    "tn_spoof_rejected": 46326,
+    "fp_spoof_accepted": 4704
+  },
+  "rf_full": {
+    "n_train": 175959.0,
+    "is_full": 1.0,
+    "eer": 0.1173598158171983,
+    "threshold": 0.4233333333333333,
+    "accuracy": 0.8828056592469699,
+    "precision_bonafide": 0.6750788643533123,
+    "recall_bonafide": 0.8823487595080686,
+    "f1_bonafide": 0.764921578898715,
+    "roc_auc": 0.9548391839278836,
+    "tp_bonafide_accepted": 12412.0,
+    "fn_bonafide_rejected": 1655.0,
+    "tn_spoof_rejected": 45056.0,
+    "fp_spoof_accepted": 5974.0
+  },
+  "sweep_points": 112,
+  "edge_warnings": [
+    "best n_train=175,959 is the ENTIRE train split -- dev EER was still improving with data, but no more training data exists to add"
+  ]
+}

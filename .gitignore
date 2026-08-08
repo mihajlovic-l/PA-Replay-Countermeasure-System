@@ -6,7 +6,13 @@ manifests/
 splits/
 features/
 models/
-results/
+
+# results/: the small summaries, aggregate tables and figures ARE tracked (same
+# rationale as EDA/ -- small, and they are the thing you actually want to read in
+# the repo). Only the bulky per-file score dumps are excluded: ~2.3MB each today,
+# and Phase 7's 2021 versions will carry 721,332 rows. Those regenerate in seconds
+# by re-scoring an already-saved model -- fitting is the slow part, not scoring.
+results/*dev_scores*.csv
 
 # Python
 __pycache__/

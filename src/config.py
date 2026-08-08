@@ -116,6 +116,64 @@ CQT_TOP_DB = 80.0
 # instead, uniformly, for one consistent decode path across the whole corpus.
 FEATURE_EXTRACTION_N_JOBS = 8  # leave a few of the 12 logical cores free
 
+# --- Phase 5 classical baseline (MFCC -> SVM / RF) ---
+# RBF SVM scales ~O(n^2.2) here (benchmarked: 2k->0.1s, 5k->0.7s, 10k->6.2s,
+# 20k->28s), so fitting the full 175,959-row train split would take ~56min for a
+# SINGLE fit -- the implied Gram matrix alone is ~248GB at float64. The SVM is
+# therefore fitted on a stratified subsample; the size is chosen empirically from
+# a learning curve rather than guessed.
+# Phase 5 runs a FULL FACTORIAL sweep: every subsample size x every (C, gamma).
+# That is deliberately more compute than picking one size from a learning curve
+# and grid-searching only there -- it yields a complete, uniform results table
+# (no "best size chosen by one arbitrary hyperparameter setting" caveat) and lets
+# the learning curve be read at each hyperparameter combination independently.
+SVM_SWEEP_SIZES = [10_000, 20_000, 50_000, 80_000, 100_000, 150_000]
+# Also sweep the entire train split. Kept as a flag rather than a literal size
+# because the exact row count is data-dependent (currently 175,959) -- the code
+# resolves it from the loaded split, so a future re-split can't silently make
+# this constant wrong.
+SVM_SWEEP_INCLUDE_FULL = True
+
+# Per-size subsamples are drawn INDEPENDENTLY (each a fresh stratified draw from
+# the full train split) rather than nested. Nesting removes a little between-size
+# sampling noise, but it makes every size depend on the largest one -- so adding a
+# new, larger size to the sweep would silently change all the smaller subsamples
+# and invalidate every result already computed. Independent draws make the sweep
+# extensible: previously-computed points stay exactly reproducible.
+
+# Plateau rule: report the SMALLEST size whose dev EER is within this absolute
+# margin of the best observed. 0.002 = 0.2 percentage points of EER.
+SVM_PLATEAU_TOLERANCE = 0.002
+
+# Log-spaced: both parameters act multiplicatively, so orders of magnitude are
+# what matter. gamma="scale" = 1/(n_features * X.var()) ~= 1/120 = 0.0083 after
+# standardisation, i.e. it sits between the 1e-3 and 1e-2 grid points.
+SVM_C_GRID = [0.1, 1.0, 10.0, 100.0]
+SVM_GAMMA_GRID = ["scale", 1e-3, 1e-2, 1e-1]
+
+# CORRECTION (made after the first Phase 5 run; see PROGRESS_REPORT.md).
+# An earlier version of this file dropped columns 20-59 -- mean(delta) and
+# mean(delta-delta) -- from the SVM's input, arguing that their tiny across-file
+# variance (col-std 0.005-0.103, vs 3.5-46.0 for mean(MFCC)) meant StandardScaler
+# would just amplify numerical noise into the RBF kernel's distance metric.
+#
+# That reasoning was wrong. Low ABSOLUTE variance is not low DISCRIMINATIVE power:
+# a column with a tiny range still separates the classes well if bonafide and spoof
+# sit at reliably different points inside that range. Two independent checks agree:
+#   - the Phase 5 RF importance plot ranked mean(delta) the SECOND most important
+#     of the six feature blocks, above three blocks that were never dropped;
+#   - direct class-separation measurement: mfcc_24 (mean(delta), dropped) separates
+#     bonafide from spoof by 0.63 pooled sigma, versus 0.24 for mfcc_60
+#     (std(MFCC), kept).
+# Standardisation is in fact the mechanism that makes this small-but-real signal
+# usable by a distance-based kernel, rather than letting large-magnitude columns
+# like mfcc_1 dominate every pairwise distance.
+#
+# Both the SVM and the Random Forest now use all 120 dimensions.
+
+RF_N_ESTIMATORS = 300
+RF_N_JOBS = 8
+
 # --- Training ---
 RANDOM_SEED = 42
 LCNN_BATCH_SIZE = 32  # keep modest given the 4GB VRAM GTX 1650

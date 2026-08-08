@@ -1,4 +1,4 @@
-# Progress Report — Phases 0 through 4
+# Progress Report — Phases 0 through 5
 
 This is a narrative log of what's actually been done in the repo so far, with the
 numbers that were verified and the bugs that came up along the way. `PROJECT_PLAN.md`
@@ -261,4 +261,234 @@ corpus scale, not just in samples.
 
 ---
 
-Next: **Phase 5**, the classical MFCC→SVM/RF baseline, per `PROJECT_PLAN.md` section 6.
+## Phase 5 — Classical MFCC baseline (`src/metrics.py`, `src/train_classical.py`)
+
+### `src/metrics.py` and the project-wide score convention
+
+Written in Phase 5 because tuning needs EER, but deliberately shared with Phase 7
+rather than duplicated. It fixes one convention for the whole project: **higher
+score = more bonafide**, with **1 = bonafide (positive class), 0 = spoof**. This
+matches the orientation of the official ASVspoof baseline `score.txt` files
+(log-likelihood ratios favouring bonafide), so Phase 7 can join this project's
+scores against CQCC-GMM / LFCC-GMM / LFCC-LCNN / RawNet2 with no sign flipping —
+removing a whole class of silent sign-error bugs.
+
+Contains `compute_eer`, `eer_from_labels`, `metrics_at_threshold` (confusion
+matrix + precision/recall/F1/accuracy/ROC-AUC at one operating point) and
+`full_report`.
+
+**A correction to the plan recorded here**: `PROJECT_PLAN.md` section 5 specifies
+`SVC(probability=True)` because "probability output needed for EER". That is not
+right. EER is read off the ROC curve and is therefore purely **rank-based** — any
+monotonically-ordered score works, and `decision_function` supplies one.
+`probability=True` triggers an internal 5-fold Platt-scaling cross-validation at
+roughly 5x the fit cost, and since Platt scaling is monotonic it cannot change the
+EER anyway. The implementation uses `decision_function` throughout.
+
+### A methodological mistake, and its correction
+
+The first Phase 5 run dropped 40 of the 120 pooled-MFCC dimensions — columns 20-59,
+`mean(delta)` and `mean(delta-delta)` — from the SVM's input. The stated reasoning
+was that their across-file variance is tiny (col-std 0.005-0.103, versus 3.5-46.0
+for `mean(MFCC)`) because the time-average of a derivative telescopes toward zero,
+so `StandardScaler` would rescale numerical noise up to unit variance and pollute
+the RBF kernel's distance metric.
+
+**That reasoning was wrong: low absolute variance is not low discriminative power.**
+A column with a tiny range still separates the classes well if bonafide and spoof
+sit at reliably different points inside that range. Two independent checks agree:
+
+- the Random Forest importance plot (which always saw all 120 features) ranked
+  `mean(delta)` the **second most important of the six feature blocks**, above
+  three blocks that were never dropped;
+- direct class-separation measurement: `mfcc_24` (`mean(delta)`, dropped) separates
+  bonafide from spoof by **0.63 pooled sigma**, versus **0.24** for `mfcc_60`
+  (`std(MFCC)`, kept).
+
+Standardisation is in fact the mechanism that makes such small-magnitude signal
+*usable* by a distance-based kernel, instead of letting large-magnitude columns
+like `mfcc_1` dominate every pairwise distance.
+
+**Cost of the error**: the SVM improved from 11.809% to 9.896% dev EER at the same
+50,000-sample training size once the features were restored — **1.9 pp, ~16%
+relative**. It also inverted a conclusion: before the fix the Random Forest
+(11.736%) appeared to beat the SVM (11.809%), and that finding would have been
+written up. Afterwards the SVM leads by a wide and widening margin.
+
+The general lesson, recorded because it applies to the rest of the project:
+feature-importance and variance statistics are for **understanding**, not for
+deciding what to feed a model. The same caution applies to permutation importance
+if it is added later.
+
+### Design: a full factorial sweep
+
+The original design was "learning curve at one fixed hyperparameter setting, pick a
+size, then grid-search only at that size". It was replaced with a **full factorial
+sweep of every subsample size x every (C, gamma)** — 7 x 4 x 4 = **112 SVM fits** —
+plus a Random Forest at each of the same sizes and on the full train split.
+
+This costs far more compute but removes a real caveat: under the old design the
+chosen training size depended on one arbitrary hyperparameter setting. The uniform
+table also answers a question the old design structurally could not — whether the
+optimal `C`/`gamma` themselves shift with data quantity (they do not; see below).
+
+Why an RBF SVM has to be subsampled at all: cost scales roughly O(n^2.2) here
+(benchmarked 2k->0.1s, 5k->0.7s, 10k->6.2s, 20k->28s), and the implied Gram matrix
+at full train size is ~248GB in float64. It is never materialised — libsvm
+recomputes chunks against a bounded cache — which is exactly why it degrades so
+sharply with n.
+
+Tuning is done directly on the **speaker-disjoint 2019 dev split, not by
+cross-validation on train**: CV folds would share speakers, making them a strictly
+worse generalisation estimate than the honest dev split Phase 2 already built.
+
+**Per-size subsamples are independent stratified draws, not nested.** Nesting
+removes a little between-size sampling noise, but it makes every size depend on the
+largest one — so adding 80k/100k/150k/full to the sweep would silently have changed
+the 50k subsample and invalidated the 16 points already computed at that size. This
+was verified concretely before switching: under independent drawing the 50k indices
+come out **bit-identical** to what the earlier run used (so those points were
+genuinely reusable, saving ~2.4h), while under nesting they would not have.
+
+Work is ordered **cheapest-first** — sizes ascending, and within each size the very
+slow `gamma=0.1` points last — so an early interrupt still leaves every useful
+`(C, gamma)` pair computed. This mattered in practice: `gamma=0.1` consumed **72.8%
+of the total fitting time** while producing the worst results in the sweep.
+
+Everything is resumable at single-point granularity (the sweep CSV is written after
+every fit; RF checkpoints are keyed by size). Over the ~22h + ~15h of sweeping this
+was exercised repeatedly, including one crash that killed a run after a single
+completed point — nothing was ever recomputed unnecessarily.
+
+### Results
+
+**Best: n_train=175,959 (the entire train split), C=1.0, gamma=0.01 → 9.216% dev
+EER** (37,943 support vectors, 21.6% of training data).
+
+Best SVM per size, against the Random Forest at the same sizes:
+
+| n_train | SVM | RF | gap |
+|---|---|---|---|
+| 10,000 | 11.395% | 12.929% | +1.53 pp |
+| 20,000 | 10.628% | 12.623% | +2.00 pp |
+| 50,000 | 9.896% | 12.155% | +2.26 pp |
+| 80,000 | 9.618% | 12.057% | +2.44 pp |
+| 100,000 | 9.423% | 11.856% | +2.43 pp |
+| 150,000 | 9.363% | 11.752% | +2.39 pp |
+| 175,959 (full) | **9.216%** | 11.736% | +2.52 pp |
+
+Fitting RF at every SVM size (not only at full train) is what makes this comparison
+honest — without size-matched rows, an RF result could be attributed to a larger
+training set rather than to the algorithm.
+
+**Hyperparameter sensitivity — the two parameters behave oppositely:**
+
+- **`C` is sharply peaked but correctly located.** `C=1.0` won at every single size.
+  Its neighbours are ~1 pp worse and nearly symmetric (at 100k: `C=0.1` -> 10.434%,
+  `C=10` -> 10.312%), which is the clearest evidence the optimum sits where we
+  sampled. Fitting a parabola in log10(C) through the three points around each
+  minimum puts the vertex at C≈0.78-1.23 for all large sizes, with a predicted gain
+  over `C=1` of **~0.01 pp**. Not worth refining.
+- **`gamma` is flat near its optimum.** `scale` (= 1/(n_features x X.var()) = 1/120
+  = 0.00833 after standardisation) and `0.01` differ by 0.03-0.05 pp, and which of
+  the two wins flips between sizes — noise. The honest statement is **"the optimum
+  is gamma ≈ 0.008-0.01 and the exact value within that range is immaterial"**,
+  not that a particular value won.
+
+**`gamma=0.1` failure, explained mechanically.** It scored 17.7-23.0% EER across all
+C, took 10x longer to fit, and produced ~46,600 support vectors out of 50,000
+training samples. Measuring actual kernel similarities on the data shows why: at
+`gamma=0.1`, **99.9% of point pairs have K < 0.01**. No training example can inform
+the prediction for any other, so the model has no option but to memorise each one
+individually. At `gamma=0.001` the opposite happens (mean K = 0.80, everything looks
+alike, boundary too smooth). `scale`/`0.01` sit in the well-conditioned middle —
+which is exactly what the `scale` heuristic is engineered to produce: it makes
+`gamma * E[||xi-xj||^2] ≈ 2`, verified on our data as 0.00833 x 236.8 = 1.97.
+
+**One documented, deliberate non-pursuit**: at n=100k the `gamma=0.001` row peaks at
+`C=100`, the edge of the searched grid (12.98 -> 11.26 -> 9.97 -> 9.93 across C).
+This is the classic C-gamma compensation — a smoother kernel needs weaker
+regularisation, so the good region runs along a diagonal ridge. It was not extended,
+because that row is plateauing (the C=10 -> C=100 gain is only 0.04 pp) toward ~9.9%,
+which is still worse than the 9.42% reached at `gamma=scale`. Even a perfect `C`
+there could not reach the global optimum.
+
+**Random Forest tree count, checked rather than assumed.** `n_estimators=300` was
+chosen by convention. Evaluating the saved full-train forest with truncated
+sub-forests shows dev EER plateaus at **~100 trees** (11.916%, versus 11.736% at
+300), and 150 trees is *marginally worse* than 100 — non-monotonicity that confirms
+we are past the plateau and into the noise floor. 300 is therefore validated as
+"safely past the plateau" but is ~3x larger than necessary: 483MB and ~152s to fit,
+versus ~160MB and ~50s at 100 trees, to buy 0.18 pp. Left at 300 since it is already
+computed and genuinely the best value, but 150 is the better setting if RF reappears
+in Phase 7 or the Phase 9 demo, where a 483MB model is inconvenient.
+(`results/phase5_rf_n_estimators.{csv,png}`.)
+
+Gini (`criterion="gini"`, sklearn's default, never set explicitly) is retained for
+`feature_importances_`. Note the known MDI caveats — bias toward high-cardinality
+features, and unpredictable credit-splitting among correlated features, which does
+apply here since delta/delta-delta are derived from the MFCCs. This is why the
+dropped-feature correction above was confirmed with an independent class-separation
+measurement rather than resting on the importance plot alone.
+
+### Bugs found and fixed during Phase 5
+
+- **`gamma` dtype inconsistency corrupting grouped plots.** Rows loaded from CSV on
+  a resumed run carried `gamma` as strings while freshly-computed rows held Python
+  floats. `groupby(["C","gamma"])` then treated `"0.001"` and `0.001` as different
+  groups, leaving the migrated 50k points as unconnected singletons scattered off
+  their curves. Only the numeric gammas were affected (`"scale"` was a string
+  either way), which is why some 50k points still sat correctly. Fixed at the source
+  by normalising `gamma` to `str` on both read and write. The saved CSV was always
+  correct — only the in-memory frame was mixed — so no recomputation was needed.
+- **Stale size-matched RF checkpoint (latent).** The RF fitted at the chosen size was
+  saved to a fixed `rf_mfcc_sub.joblib`. Had the chosen size ever changed, the resume
+  logic would have loaded that file and reported a model trained at one size under
+  another size's label. Fixed by keying the filename on `n_train`.
+- **Heatmap colour scale inverted.** The `C x gamma` heatmap used `viridis_r`, which
+  renders *low* EER bright and *high* EER dark — the opposite of the intuitive
+  reading. Corrected to plain `viridis` (darker = lower EER = better), with the text
+  contrast logic flipped to match and gamma columns ordered as configured rather than
+  alphabetically.
+- The 16-entry legend in the per-combination panel overlapped the data; moved below
+  the axes.
+
+### Measurements from this phase that constrain later phases
+
+These are findings, not plans — the corresponding decisions are recorded in
+`PROJECT_PLAN.md`.
+
+- **The SVM learning curve never plateaued.** The final step (150k -> 175,959) still
+  gained 0.147 pp, and there is no more 2019 data to add. A 120-feature RBF SVM is
+  still data-hungry at the ceiling of what exists; an LCNN with far more parameters,
+  trained on the same exhausted pool, will be more so.
+- **`CQT_FIXED_FRAMES = 400` (6.40s) is longer than most files in either dataset.**
+  Measured on the actual Phase 4 cache: 2019 CQTs have median **267** frames and
+  **90.8% are shorter than 400**. 2021 eval projects to ~149 frames at its 2.39s mean,
+  with even its longest file (7.03s) barely exceeding the window. So 2019 would be
+  padded ~1.50x and 2021 ~2.68x — a train/test mismatch introduced by our own
+  windowing, on top of the real domain shift. It also defeats the reason
+  variable-length CQT was cached in the first place: random cropping only engages
+  when a file is *longer* than the window, so at T=400 roughly 91% of training files
+  would receive deterministic padding rather than per-epoch random crops.
+- **2021's pooled MFCC statistics are inherently ~1.38x noisier than 2019's.** Mean/std
+  pooling averages over ~453 frames on 2019 versus ~239 on 2021, and the standard
+  error of a pooled statistic scales as 1/sqrt(T). Part of any MFCC-SVM degradation on
+  2021 will therefore be mechanical rather than evidence about replay realism —
+  testable by restricting 2019 dev to short clips.
+- **Dev has now absorbed heavy selection pressure.** 112 SVM configurations plus 7 RF
+  fits were evaluated against it and the minimum reported. Best-of-112 is
+  optimistically biased; the top-5 spread (9.216-9.423%) suggests roughly 0.2 pp of
+  selection optimism. 2021 eval remains genuinely untouched, so the headline number
+  stays clean, but **dev EER must be presented as a tuning number, not a
+  generalisation estimate** — and Phase 6 will add further dev evaluations on top.
+- **Phase 7 cost is dominated by feature extraction, not scoring.** SVM scoring of all
+  721,332 2021-eval files projects to ~0.7h (3.56 ms/file at 37,943 support vectors),
+  while extracting features for them costs ~4h at Phase 4's measured rates.
+- **Model sizes for the Phase 9 demo**: `svm_mfcc.joblib` is 37MB and scores in
+  3.56 ms/file — viable for a live demo. `models/` as a whole is now ~1.6GB, and
+  `rf_mfcc_full.joblib` alone is 483MB — a lab artifact, not something to ship.
+
+---
+
+Next: **Phase 6**, the CQT-LCNN main system, per `PROJECT_PLAN.md` section 6.

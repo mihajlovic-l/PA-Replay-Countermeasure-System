@@ -435,39 +435,93 @@ feat = np.concatenate([mfcc, delta1, delta2], axis=0)   # (60, T)
 vec = np.concatenate([feat.mean(axis=1), feat.std(axis=1)])   # fixed 120-dim vector
 ```
 
-4.3 — CQT pipeline (for LCNN):
+4.3 — CQT pipeline (for LCNN). **Corrected during implementation — see the two notes
+below; the original sketch here specified 96 bins and a fixed 400-frame cache, and
+neither survived contact with the data:**
 ```python
-C = librosa.cqt(y=y, sr=16000, hop_length=256, n_bins=96, bins_per_octave=12)
-cqtgram = librosa.amplitude_to_db(np.abs(C))    # log-power CQT spectrogram
-cqtgram = pad_or_crop(cqtgram, T=400)            # fixed (96, 400) "image"
+C = librosa.cqt(y=y, sr=16000, hop_length=256, n_bins=90, bins_per_octave=12)
+cqtgram = librosa.amplitude_to_db(np.abs(C), ref=np.max, top_db=80)  # log-power CQT
+# NOTE: cached at NATURAL length. The pad/crop to a fixed T happens in Phase 6's
+# Dataset, not here -- see 4.3b.
 ```
+
+**4.3a — `n_bins` must be 90, not 96.** 96 bins at 12 bins/octave from the default
+fmin (~32.7Hz, C1) violates the Nyquist limit at 16kHz and `librosa.cqt` raises
+`ParameterError`. This is subtle: the top bin's *centre* frequency (~7.9kHz) looks
+safely under 8kHz, but the wavelet's own bandwidth pushes past it. Confirmed
+empirically that 96 fails and 90 does not. 90 bins = 7.5 octaves.
+
+**4.3b — cache at natural length; do the fixed-length windowing in Phase 6.** The
+plan's "random crop while training, center crop for eval" is incompatible with
+baking a single crop in at cache time — the crop would happen once and be reused
+every epoch, which is not random and throws away the augmentation benefit. So Phase
+4 caches each file's CQT unpadded and uncropped, and Phase 6's `Dataset` pads short
+clips / randomly (train) or centrally (dev/eval) crops long ones on every access.
+No length cap is applied: a full scan of all 241,056 files found only 0.748% exceed
+10s, and capping there would have saved ~17MB out of ~6.1GB.
+
+**4.3c — `CQT_FIXED_FRAMES` must come down from 400.** Measured on the real cache:
+400 frames is a 6.40s window, but 2019 CQTs have a median of **267** frames and
+**90.8% are shorter than 400**; 2021 eval projects to ~149 frames (2.39s mean), its
+longest file barely reaching 439. Keeping 400 would mean padding 2019 by ~1.50x and
+2021 by ~2.68x — a train/test mismatch of our own making on top of the real domain
+shift — and would leave ~91% of training files receiving deterministic padding
+instead of the per-epoch random crops that 4.3b exists to enable. **Set it to ~250
+frames (4.0s)**, near the 2019 median so roughly half the training set genuinely
+gets cropped and 2021's padding drops to ~1.7x. Better still, treat it as a Phase 6
+hyperparameter tuned on dev — it is consumed only at Dataset load time, so changing
+it costs nothing and requires no re-extraction.
 
 4.4 — Caching strategy, with the disk-space math behind it: extracting features once and
 caching to disk is essential given 943,110 files in 2021 alone — decoding FLAC every
 epoch would be far too slow. But the storage format matters a lot:
 - MFCC pooled vectors are tiny (~480 bytes/file) regardless of float32/uint8 — caching
   the full enriched training pool (241,056 files) costs only ~116MB. Not a concern.
-- CQT spectrograms at a representative 96×400 shape:
-  - float32 (naive default): ~150KB/file → **~34.5GB** for the 241,056-file training
-    pool. Too large relative to available disk (see section 7 for exact free-space
-    numbers at the time this was calculated).
-  - **uint8, quantized dB values** (same idea as storing any grayscale image — no
-    meaningful loss for training purposes since the CNN already treats this as an image):
-    ~37.5KB/file → **~8.4GB** for the training pool. This is the recommended approach.
-  - uint8 + smaller shape (64×250): ~16KB/file → **~3.6GB**. Even safer margin if needed.
+  **(Actual: 171MB as a single consolidated parquet, including identifier columns.)**
+- CQT spectrograms, **uint8, quantized dB values** (same idea as storing any grayscale
+  image — no meaningful loss for training purposes since the CNN already treats this as
+  an image). float32 would be 4x larger for no benefit.
+  **Actual cost, at natural variable length rather than a fixed 96×400: 6.3GB for the
+  241,056-file pool** — less than the 8.4GB this section originally estimated, because
+  most clips are shorter than a 400-frame window rather than needing padding up to it.
 - **Do NOT cache CQT features for the 2021 eval set at all.** Even quantized, 721,332
   files (the `partition=="eval"` subset) at 96×400 uint8 would be ~27GB — a large chunk
   of whatever's free on the data drive, for a set that's only passed through ONCE (final
   scoring), not across many training epochs. Instead: extract → score → discard per
   batch in a streaming loop, persisting only the tiny per-file score output (a few MB
   total), never the spectrograms themselves.
+- **Phase 7 must extract once and score BOTH models in the same pass.** Measured in
+  Phase 5: scoring all 721,332 eval files with the tuned SVM costs only ~0.7h
+  (3.56 ms/file at 37,943 support vectors), whereas *extracting* their features costs
+  ~4h at Phase 4's rates. Running separate streaming passes for the SVM and the LCNN
+  would pay that ~4h twice for no reason.
+
+4.5 — **Decoding: use ffmpeg for every file, not `soundfile`.** ~46% of the 2019 corpus
+fails to decode with `soundfile`'s bundled `libsndfile` 1.2.2 (`flac decoder lost sync`
+/ `unknown error in flac decoder`) — confirmed at scale on a 500-file sample, and
+root-caused to a decoder limitation, not file corruption (raw headers check out fine).
+`librosa.load`'s `audioread` fallback does not help either, since there is no system
+ffmpeg. Fixed by installing `imageio-ffmpeg` (a pip package bundling a portable static
+ffmpeg binary — no admin rights needed) and decoding everything through it uniformly.
+One consistent decode path for the whole corpus is a stronger methods-section claim
+than a try-soundfile-then-fall-back hybrid, and avoids numerical inconsistency between
+two decoders. Cost ~76ms/file for decode; the full 241,056-file extraction completed
+with **zero failures**.
 
 ### Phase 5 — Classical ML baseline
 1. Load pooled MFCC vectors + labels from `splits/train_2019.csv`.
 2. `StandardScaler` fit on train only, applied to dev (avoid leaking dev statistics).
-3. `SVC(kernel="rbf", class_weight="balanced", probability=True)` — probability output
-   needed for EER, which needs a continuous score not a hard label. Grid-search
-   `C`/`gamma` on dev only.
+3. `SVC(kernel="rbf", class_weight="balanced")` — grid-search `C`/`gamma` on dev only.
+   **Correction to the original sketch**: this said `probability=True`, on the grounds
+   that EER "needs a continuous score not a hard label". True, but `decision_function`
+   already supplies one. EER is read off the ROC curve and is therefore purely
+   *rank-based*, so any monotonically-ordered score works. `probability=True` triggers
+   an internal 5-fold Platt-scaling CV at ~5x the fit cost, and since Platt scaling is
+   monotonic it cannot change the EER anyway. Use `decision_function`.
+   **Implemented result** (see PROGRESS_REPORT.md): a full factorial sweep of 7
+   subsample sizes x 4 C x 4 gamma = 112 fits. Best is C=1.0, gamma≈0.008-0.01 on the
+   full train split → 9.216% dev EER. RBF SVM cost scales ~O(n^2.2) here, which is why
+   size is swept rather than assumed.
 4. Also fit `RandomForestClassifier(class_weight="balanced")` — gives feature
    importances nearly for free (nice extra plot: "which MFCC coefficients matter most").
 5. Save both with `joblib.dump`.
@@ -501,12 +555,87 @@ known-good recipe.) Training essentials: `BCEWithLogitsLoss(pos_weight=...)` set
 train-split class ratio; Adam, lr ~1e-3 to 1e-4, `ReduceLROnPlateau` scheduled on **dev
 EER, not dev loss** (they don't always move together under class imbalance); batch size
 limited by the 4GB GPU (start at 32, adjust — see section 7); 10-20 epochs realistic;
-checkpoint on best dev EER. Optional but standard-in-literature and cheap: light
-augmentation (additive noise, time-shift, occasional codec/compression simulation via
-RawBoost-style perturbation) to help bridge the simulated→real domain gap discussed in
-section 3.3.
+checkpoint on best dev EER.
+
+**Augmentation — upgraded from "optional" to important, with a concrete plan.** The
+Phase 5 learning curve is direct evidence: an RBF SVM on 120 pooled features never
+plateaued, still gaining 0.147 pp at the final step to the *entire* train split. There
+is no more 2019 data, and the LCNN has far more parameters to feed.
+
+But quantity is the weaker argument. The stronger one is the **simulation shortcut**.
+2019 PA is entirely simulated (section 3.3): every spoof passed through the same small
+family of synthetic shoebox RIRs and device-response curves — a highly regular,
+low-entropy signature. A high-capacity CNN can reach excellent 2019 dev EER by keying
+on "this has shoebox-convolution structure" rather than on the loudspeaker's
+electromechanical fingerprint, and that shortcut collapses on 2021, where the replay is
+physically real. Augmentation's real job here is to make the simulation-specific cues
+**unreliable as discriminators**, forcing the model back onto the physics that actually
+transfers. Each perturbation stands in for something the simulator omits:
+
+| augmentation | missing physics it stands in for |
+|---|---|
+| additive noise (varied SNR) | real mic self-noise |
+| extra/varied reverb, real RIRs | room behaviour beyond the shoebox model |
+| mild clipping / nonlinear distortion | real loudspeaker nonlinearity |
+| codec simulation (MP3/AAC/GSM), RawBoost-style filtering | real recording-chain processing |
+| time shift / random crop | position invariance; blocks onset-timing shortcuts |
+
+**The constraint**: Phase 4 caches *CQT spectrograms*, not waveforms, which splits
+augmentation into two very different cost classes.
+
+- *Spectrogram-domain* (random crop, SpecAugment time/frequency masking, mixup, gain
+  offsets) applies directly to the cached uint8 arrays — essentially free, fresh every
+  epoch.
+- *Waveform-domain* (noise, reverb, codec, RawBoost) must be applied **before** the CQT,
+  so the cache cannot help. Either (a) re-decode and re-CQT every epoch — ~1h per epoch
+  at Phase 4's measured 155ms/file on 8 cores, so ~20h per training run — or (b)
+  pre-compute a few augmented copies once.
+
+**Decision: spectrogram-domain augmentation + option (b), with (a) held in reserve.**
+Rationale: (a)'s cost is paid *per run* and Phase 6 will involve 5-10 runs (tuning
+`CQT_FIXED_FRAMES`, lr, architecture, mask widths), whereas (b) is a one-time ~3-4h.
+The performance gap is also smaller than it first appears, because the two compose:
+under either option the model never sees a byte-identical input twice, since fresh
+random crops and SpecAugment masks are applied on top every epoch. The fixed waveform
+copies only need to supply *enough distinct samples of the missing physics* to stop any
+single one being a reliable cue — and 1→3 samples captures most of that, with 3→∞ on
+the flat part of the curve.
+
+Concretely: **3 augmented copies, training split only** (dev/eval are always evaluated
+clean, so there is no reason to augment the other 65,097 files). At ~4.6GB per
+training-only copy that is ~13.7GB, comfortable against the ~28GB free on E:.
+
+**Decide (a) empirically rather than by guesswork**: train with (b), then watch train
+EER versus dev EER. If dev plateaus while train keeps improving, the model is
+memorising the fixed copies and more variety would genuinely pay — then add copies
+(cheap) or reconsider (a). If they track each other, (a) would have bought nothing.
+This is the same evidence-first approach used for the Phase 5 learning curve and the RF
+tree count, and it costs one training run that was happening anyway.
+
+**Caveat to test, not assume**: SpecAugment's frequency masking could mask exactly the
+high-frequency band this thesis argues carries the replay fingerprint. The literature
+does use it successfully for anti-spoofing, but treat mask width as a dev-tuned
+hyperparameter rather than copying ASR defaults — and the result is worth reporting
+either way.
 
 ### Phase 7 — Evaluation
+**Implemented in `src/metrics.py` (written in Phase 5, shared with Phase 7).** It fixes
+one convention project-wide: **higher score = more bonafide**, with 1 = bonafide as the
+positive class — matching the official baseline `score.txt` orientation so 7.4's
+comparison table joins with no sign flipping.
+
+**Two things to carry into Phase 7 from Phase 5:**
+- **Dev EER is a tuning number, not a generalisation estimate.** 112 SVM configurations
+  plus 7 RF fits were selected against dev; best-of-112 carries roughly 0.2 pp of
+  selection optimism (the top-5 spread). 2021 eval is genuinely untouched and remains
+  the only clean number. Phase 6 adds further dev evaluations on top.
+- **Expect a mechanical component to any MFCC-SVM degradation on 2021.** Pooled MFCC
+  statistics average over ~453 frames on 2019 but only ~239 on 2021, and the standard
+  error of a pooled statistic scales as 1/sqrt(T) — so 2021's features are inherently
+  ~1.38x noisier before any question of replay realism arises. Testable by restricting
+  2019 dev to short clips and watching EER rise; worth separating from the domain-shift
+  story rather than attributing all of it to simulated-vs-real.
+
 7.1 — EER (primary metric, computed identically for every system compared):
 ```python
 def compute_eer(bonafide_scores, spoof_scores):

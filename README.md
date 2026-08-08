@@ -13,25 +13,34 @@ been done so far (with numbers, decisions, and bugs found/fixed) lives in
 
 ## Status
 
-**Phases 0–4 complete** (environment setup, manifest building, speaker-disjoint
-resplitting, EDA, DSP feature extraction). Next up: Phase 5, the classical MFCC→SVM/RF
-baseline.
+**Phases 0–5 complete** (environment setup, manifest building, speaker-disjoint
+resplitting, EDA, DSP feature extraction, classical MFCC baseline). Next up: Phase 6,
+the CQT-LCNN main system.
+
+Current best classical baseline: **MFCC-SVM (RBF), 9.216% EER** on the speaker-disjoint
+2019 dev split — a *tuning* number, not a generalisation estimate. The held-out
+ASVspoof2021 PA eval set remains untouched until Phase 7.
 
 ## Repo layout
 
 ```
 src/
-  config.py     -- single source of truth for paths and hyperparameters
-  manifest.py   -- Phase 1: raw protocol files -> clean parquet manifests
-  resplit.py    -- Phase 2: speaker-disjoint train/dev resplit + ASV-enrollment enrichment
-  eda.py        -- Phase 3: exploratory data analysis, writes plots to EDA/
-  features.py   -- Phase 4: MFCC + CQT extraction, cached to E:\ASVspoof\features
+  config.py          -- single source of truth for paths and hyperparameters
+  manifest.py        -- Phase 1: raw protocol files -> clean parquet manifests
+  resplit.py         -- Phase 2: speaker-disjoint train/dev resplit + ASV-enrollment enrichment
+  eda.py             -- Phase 3: exploratory data analysis, writes plots to EDA/
+  features.py        -- Phase 4: MFCC + CQT extraction, cached to E:\ASVspoof\features
+  metrics.py         -- EER + supplementary metrics (Phase 5, shared with Phase 7)
+  train_classical.py -- Phase 5: SVM/RF factorial sweep, writes to results/
 EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
+explanations/   -- teaching figures (e.g. how ROC-AUC relates to pairwise ranking)
+results/        -- summaries, aggregate tables and figures (tracked); bulky per-file
+                   score dumps are gitignored
 PROJECT_PLAN.md     -- full thesis plan, reasoning, and dataset breakdown
 PROGRESS_REPORT.md  -- detailed log of work completed so far
 
-manifests/, splits/, models/, results/  -- generated artifacts (gitignored;
-  reproducible by re-running the src/ scripts against the dataset)
+manifests/, splits/, models/  -- generated artifacts (gitignored; reproducible by
+  re-running the src/ scripts against the dataset)
 ```
 
 ## Setup
@@ -53,4 +62,8 @@ manifests/, splits/, models/, results/  -- generated artifacts (gitignored;
   python -m src.resplit
   python -m src.eda
   python -m src.features
+  python -m src.train_classical      # add --force to recompute instead of resuming
   ```
+- The long-running phases (`features`, `train_classical`) are **resumable**: completed
+  work is cached and skipped on re-run, so an interrupt costs at most the one item in
+  flight. `train_classical` writes its sweep CSV after every single fit.
