@@ -95,6 +95,27 @@ def process_one(row: dict) -> dict:
         return {"filename": filename, "mfcc": None, "error": str(e)}
 
 
+def extract_for_eval(row: dict) -> dict:
+    """Decode + MFCC + CQT, returning the CQT instead of writing a .npy.
+
+    Phase 7's streaming worker. It lives HERE, not in evaluate_2021.py, and that is
+    load-bearing rather than tidiness: joblib's loky workers import the module a
+    function is DEFINED in so they can unpickle it, and evaluate_2021 imports torch.
+    Defining it there made all 8 workers load torch + the CUDA runtime (~300MB
+    each), which on this 5.9GB machine failed with Windows error 1455
+    (ERROR_COMMITMENT_LIMIT) on ~11% of files -- the same commit-limit ceiling that
+    rules out DataLoader workers in Phase 6. This module imports no torch, so a
+    worker here costs what Phase 4's did, which is known to fit.
+    """
+    try:
+        y = load_audio(row["filepath"])
+        return {"filename": row["filename"], "mfcc": extract_mfcc_vector(y),
+                "cqt": extract_cqt_uint8(y), "n_samples": len(y), "error": None}
+    except Exception as e:  # noqa: BLE001
+        return {"filename": row["filename"], "mfcc": None, "cqt": None,
+                "n_samples": 0, "error": f"{type(e).__name__}: {e}"}
+
+
 def load_pool() -> pd.DataFrame:
     train_df = pd.read_csv(config.SPLITS_DIR / "train_2019.csv")
     train_df["subset"] = "train"

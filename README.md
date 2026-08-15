@@ -15,7 +15,8 @@ been done so far (with numbers, decisions, and bugs found/fixed) lives in
 
 **Phases 0–6 complete** (environment setup, manifest building, speaker-disjoint
 resplitting, EDA, DSP feature extraction, classical MFCC baseline, CQT-LCNN main
-system). Next up: Phase 7, evaluation on the held-out ASVspoof2021 PA eval set.
+system). **Phase 7 is built and validated but has not been run** — the held-out 2021
+set is still unscored.
 
 | system | dev EER | ROC-AUC |
 |---|---|---|
@@ -25,8 +26,10 @@ system). Next up: Phase 7, evaluation on the held-out ASVspoof2021 PA eval set.
 An **11.6x reduction** — the thesis's central claim, that constant-Q features retain
 the replay fingerprint that mel-scaled features discard. These are *tuning* numbers on
 the speaker-disjoint 2019 dev split, not generalisation estimates: the 2021 PA eval set
-remains untouched until Phase 7, where the systems are scored once against a
-pre-registered list.
+remains untouched until Phase 7, where **nine pre-registered systems** are scored in a
+single pass against three predictions written down in advance (`PROJECT_PLAN.md`
+phase 7). Dev has absorbed heavy selection pressure across Phases 5 and 6; 2021 will be
+the only clean number.
 
 ## Repo layout
 
@@ -41,9 +44,14 @@ src/
   train_classical.py -- Phase 5: SVM/RF factorial sweep
   pack_features.py   -- Phase 6: pack per-file CQTs into one blob per split (31x faster I/O)
   augment_waveform.py-- Phase 6: pre-computed waveform augmentation copies
-  datasets.py        -- Phase 6: torch Dataset (pad/crop, SpecAugment, normalisation)
+  datasets.py        -- Phase 6: torch Dataset + the shared windowing/normalisation
+                        functions Phase 7 reuses, so dev and eval are scored identically
   models_lcnn.py     -- Phase 6: LCNN-9 with Max-Feature-Map activations
   train_lcnn.py      -- Phase 6: training loop, EER-scheduled, resumable
+  evaluate_2021.py       -- Phase 7 pass 1: stream 2021, score 7 LCNNs, cache CQT+MFCC
+  score_classical_2021.py-- Phase 7 pass 2: SVM/RF from the cached MFCC
+  report_2021.py         -- Phase 7 pass 3: EER tables, DET curves, condition breakdown,
+                            controls, verdicts on the registered predictions
 EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
 explanations/   -- teaching figures (e.g. how ROC-AUC relates to pairwise ranking)
 results/        -- grouped per phase (phase5/{svm,rf}/, phase6/<run>/); summaries,
@@ -78,7 +86,16 @@ manifests/, splits/, models/  -- generated artifacts (gitignored; reproducible b
   python -m src.pack_features        # Phase 6 prerequisite
   python -m src.augment_waveform     # optional: waveform-augmented copies
   python -m src.train_lcnn --tag flatten_T400 --n-frames 400 --head flatten
+  python -m src.evaluate_2021         # Phase 7 pass 1 (~6.2h, GPU + 8 CPU workers)
+  python -m src.score_classical_2021  # Phase 7 pass 2 (~1.1h, CPU only)
+  python -m src.report_2021           # Phase 7 pass 3 (seconds, re-runnable)
   ```
-- The long-running phases (`features`, `train_classical`) are **resumable**: completed
-  work is cached and skipped on re-run, so an interrupt costs at most the one item in
-  flight. `train_classical` writes its sweep CSV after every single fit.
+- The long-running phases (`features`, `train_classical`, `evaluate_2021`) are
+  **resumable**: completed work is cached and skipped on re-run, so an interrupt costs
+  at most the one item (or 4,000-file chunk) in flight. `train_classical` writes its
+  sweep CSV after every single fit.
+- Phase 7's two scoring passes are deliberately separate: libsvm scoring is
+  single-threaded CPU work that would contend with pass 1's 8 extraction workers.
+  Pass 1 caches the 2021 CQT (~12.7GB) and pooled MFCC (~500MB) under
+  `E:\ASVspoof\phase7_2021\`, so re-scoring after any fix costs ~1.5h of GPU rather
+  than a full re-extraction — insurance against finding a bug after a 6-hour pass.

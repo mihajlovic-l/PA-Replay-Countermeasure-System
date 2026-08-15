@@ -18,6 +18,14 @@ models/
 # silently failed to match results/phase6/<tag>/dev_scores.csv.
 **/dev_scores*.csv
 
+# Phase 7's per-file 2021 score exports: one score.txt per system in the official
+# ASVspoof submission format, ~20MB each x 9 systems over 943,110 trials. They are
+# the artifact an examiner would use to recompute every reported number
+# independently, but they are regenerable from the cached scores in seconds
+# (src.report_2021), so they are kept locally rather than versioned. The summaries,
+# tables and figures in results/phase7/ ARE tracked.
+results/phase7/scores/
+
 # Python
 __pycache__/
 *.py[cod]

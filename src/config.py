@@ -259,5 +259,98 @@ SPECAUG_TIME_MASK_MAX = 25      # frames, out of CQT_FIXED_FRAMES
 SPECAUG_N_FREQ_MASKS = 2
 SPECAUG_FREQ_MASK_MAX = 8       # bins, out of CQT_N_BINS (90)
 
+# --- Phase 7: evaluation on the held-out 2021 PA eval set ---
+# PRE-REGISTERED SYSTEMS, fixed before 2021 was touched (PROJECT_PLAN.md phase 7).
+# Ordered best-to-worst by dev EER; the dev numbers are recorded here purely so the
+# registration is legible in one place -- they are NOT read by any code.
+#
+# The list extends PROJECT_PLAN.md's original five LCNNs by two, both trained in
+# Phase 6 and both declared before any 2021 score existed:
+#   T400  -- the MATCHED CONTROL that makes two of the three registered predictions
+#            testable at all. `cmvn_T400` and `baseline_T250` are timepool models
+#            while the primary `flatten_T400` is flatten, so comparing either
+#            against the primary varies TWO things at once (norm+head, or T+head).
+#            T400 is timepool/unit, so cmvn_T400 differs from it only in norm and
+#            baseline_T250 only in T. Without it predictions 1 and 3 are confounded.
+#   T150  -- completes the T axis (150/250/400, all timepool) for ~5 min of GPU.
+PHASE7_LCNN_SYSTEMS = {
+    "flatten_T400": 0.00798,        # primary -- best on dev
+    "T400": 0.00902,                # matched control (timepool, unit)
+    "cmvn_T400": 0.01293,           # prediction 3: CMVN may transfer better
+    "flatten_T400_aug1": 0.01486,   # mild waveform augmentation (50% clean)
+    "flatten_T400_aug": 0.02353,    # aggressive waveform augmentation (25% clean)
+    "baseline_T250": 0.02780,       # prediction 1: less 2019->2021 padding mismatch
+    "T150": 0.06584,                # completes the T axis
+}
+# Classical Phase 5 baselines, scored from the cached 2021 MFCC in a second pass.
+PHASE7_CLASSICAL_SYSTEMS = {"MFCC-SVM": 0.09216, "MFCC-RF": 0.11736}
+
+# Which partitions to extract. The HEADLINE number is PA2021_REPORTED_PARTITION
+# ("eval", 721,332 rows) exactly as pre-registered; `progress` and `hidden` are
+# extracted in the same pass (+~30% runtime) purely as a free consistency check,
+# and the four official baseline score.txt files already cover all three.
+PHASE7_PARTITIONS = ("eval", "progress", "hidden")
+
+PHASE7_DIR = RESULTS_DIR / "phase7"
+# score.txt exports, one per system, in the official ASVspoof submission format
+# (`FILENAME SCORE`, higher = bonafide -- the convention metrics.py fixes
+# project-wide). ~20MB each, so gitignored; the summaries/figures beside them are
+# tracked. Exporting these lets an examiner recompute every reported EER from a
+# text file, without the 45GB corpus or this pipeline.
+PHASE7_SCORES_DIR = PHASE7_DIR / "scores"
+
+# All bulky Phase 7 intermediates live on E:, never in the OneDrive-synced repo.
+PA2021_WORK_DIR = ASVSPOOF_ROOT / "phase7_2021"
+PA2021_CQT_SHARD_DIR = PA2021_WORK_DIR / "cqt"
+PA2021_MFCC_SHARD_DIR = PA2021_WORK_DIR / "mfcc"
+PA2021_SCORE_SHARD_DIR = PA2021_WORK_DIR / "lcnn_scores"
+PA2021_CLASSICAL_SHARD_DIR = PA2021_WORK_DIR / "classical_scores"
+PA2021_CQT_INDEX = PA2021_WORK_DIR / "cqt_index.parquet"
+PA2021_LCNN_SCORES = PA2021_WORK_DIR / "lcnn_scores.parquet"
+PA2021_CLASSICAL_SCORES = PA2021_WORK_DIR / "classical_scores.parquet"
+PA2021_FAILURES_CSV = PA2021_WORK_DIR / "extraction_failures.csv"
+
+# The 2021 pooled MFCC table IS cached (~500MB for all partitions), unlike the
+# 27GB-at-the-time CQT estimate that PROJECT_PLAN.md 4.4 rejected. It is 0.05% of
+# that, and it decouples classical scoring from the extraction pass -- libsvm would
+# otherwise fight the 8 extraction workers for cores. It also makes the classical
+# scores re-runnable, and would let a future model be scored with no re-extraction.
+
+# PROJECT_PLAN.md 4.4 rejected caching 2021 CQT at an estimated ~27GB -- but that
+# assumed 96 bins x 400 PADDED frames. Neither holds: 90 bins (the Nyquist fix),
+# cached at NATURAL length as in Phase 4. Measured mean is 149.4 frames, so
+# 90 x 149.4 x 943,110 = ~12.7GB, against 31.7GB free on E:.
+#
+# Worth it as insurance rather than for speed: the dominant Phase 7 risk is finding
+# a bug AFTER a ~4h pass (wrong crop, normalisation mismatch, model loaded at the
+# wrong T). Cached, re-scoring all nine systems is a ~1.5h GPU job with no CPU work;
+# uncached it is another full re-extraction. Writing it is nearly free -- the arrays
+# already pass through the main process on their way to the GPU.
+#
+# Stored as ONE BLOB SHARD PER CHUNK, not one monolithic blob: merging shards at the
+# end would mean ~25GB of I/O and a transient 25.4GB footprint against 31.7GB free.
+# The index therefore carries a `shard` column alongside `offset`/`n_frames`.
+# Per-file .npy is not an option -- Phase 6 measured 10.3 ms per open, which over
+# 943,110 files is 2.7h just to read the cache back once (see PACKED_DIR above).
+PHASE7_CACHE_CQT = True
+
+# Files per chunk. Sized so one chunk's returned arrays stay small in a 5.9GB
+# machine: 4,000 x 90 x ~149 bytes = ~54MB of CQT plus ~2MB of MFCC.
+PHASE7_CHUNK_SIZE = 4000
+# Forward-only, so activations are not retained; 64 x 90 x 400 x 4B = 9.2MB/batch.
+PHASE7_EVAL_BATCH = 64
+# Extract chunk i+1 on a background thread while the GPU scores chunk i. The GPU
+# work (~1.5h) does not otherwise overlap the CPU extraction (~2.4-2.9h), so this
+# saves ~25%. Costs one extra chunk in flight (~56MB). --no-prefetch disables it.
+PHASE7_PREFETCH = True
+# Random files re-extracted from source and compared BYTE-FOR-BYTE against the
+# packed blob. Same check pack_features.py runs, for the same reason: a silent
+# offset bug would corrupt every score with nothing surfacing as an error.
+PHASE7_VERIFY_N = 200
+
+for d in (PHASE7_DIR, PHASE7_SCORES_DIR, PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
+          PA2021_MFCC_SHARD_DIR, PA2021_SCORE_SHARD_DIR, PA2021_CLASSICAL_SHARD_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
 # --- Training ---
 RANDOM_SEED = 42

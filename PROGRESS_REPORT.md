@@ -913,5 +913,217 @@ nested Phase 6 files.
 
 ---
 
-Next: **Phase 7**, evaluation on the held-out 2021 PA eval set, per
-`PROJECT_PLAN.md` section 6.
+## Phase 7 — Evaluation on held-out 2021 PA (BUILT AND VALIDATED; RUN NOT YET EXECUTED)
+
+**Status, stated plainly: the held-out set has not been scored.** Three modules were
+written, the shared windowing code was refactored and proven behaviour-preserving,
+the whole pipeline was validated end to end, and the costs were measured. No 2021
+number exists yet beyond a 600-file pipeline smoke test (disclosed in
+`PROJECT_PLAN.md` phase 7). This section records the build; the results section will
+be written after the run.
+
+### 7.0 A gap in the pre-registration, found before the run
+
+The registration in `PROJECT_PLAN.md` listed five LCNNs, and **could not test two of
+its own three predictions**. `cmvn_T400` and `baseline_T250` are both *timepool*
+models while the primary `flatten_T400` is *flatten*, so comparing either against the
+primary varies **two** things at once — normalisation *and* head for prediction 3
+("CMVN may transfer better"), T *and* head for prediction 1 ("T=250 may transfer
+better"). Either result would have been uninterpretable.
+
+The fix costs almost nothing: **`T400` (timepool, unit) was already trained in Phase 6**
+(0.902% dev EER) and is the matched control — `cmvn_T400` differs from it only in
+normalisation, `baseline_T250` only in T. Added along with `T150` (completing the T
+axis at 150/250/400, all timepool, ~5 min of GPU) and the Phase 5 **MFCC-RF**
+(~6 min from cached MFCC). Nine systems total, all frozen in Phase 5/6, all declared
+in `src/config.py` **before any 2021 score existed**. The primary remains
+`flatten_T400` regardless of outcome.
+
+The general lesson, worth keeping: a pre-registered comparison is only as good as its
+*control*. Registering the interesting systems is not enough if nothing in the list
+isolates one variable at a time.
+
+### 7.1 Modules
+
+- **`src/evaluate_2021.py`** — the one expensive pass. Streams the corpus in chunks
+  of 4,000: 8 joblib workers decode → MFCC → CQT, then the main process windows each
+  chunk and scores all 7 LCNNs. The seven need only **four** distinct inputs
+  ((T400,unit), (T400,cmvn), (T250,unit), (T150,unit)), so each CQT is windowed four
+  times rather than seven, with four models sharing the (T400,unit) view. Resumable
+  at chunk granularity; caches CQT and pooled MFCC; verifies the cache byte-for-byte.
+- **`src/score_classical_2021.py`** — SVM and RF from the cached MFCC. A *separate*
+  pass on purpose: libsvm scoring is single-threaded CPU work that would otherwise
+  contend with the 8 extraction workers for the same cores, slowing the expensive
+  pass to speed up the cheap one.
+- **`src/report_2021.py`** — reads score tables only, never audio, so every table and
+  figure regenerates in seconds. Covers 7.1–7.5 plus both controls and an explicit
+  verdict on each registered prediction.
+
+### 7.2 The refactor, and how it was proven safe
+
+`_fit_length` and `_normalise` moved out of `CQTDataset` to module level in
+`datasets.py`. Phase 7 cannot reuse the class (2021 CQTs are never written into the
+Phase 6 blob layout), but if the 2021 windowing diverged from how dev was windowed,
+the dev-vs-eval comparison this entire phase exists to make would be invalid. Sharing
+one code path makes that a fact rather than an assertion.
+
+Because the change touches training, it was verified rather than eyeballed, in two
+stages:
+
+1. **Behaviour fingerprint, before and after.** Eight configurations (dev/train,
+   centre/random crop, unit/CMVN, T=150/250/400, with and without the 3-copy waveform
+   augmentation) were hashed over deliberately chosen indices spanning both the
+   tile-pad and crop branches. **All eight identical.** The `train_random_*` cases are
+   the load-bearing ones: `fit_length` and `_specaugment` draw from the same RNG, so
+   had the refactor changed how many draws the crop consumes, every subsequent
+   SpecAugment mask would have shifted and the hash would have moved.
+2. **Phase 6 end to end.** `flatten_T400`, `cmvn_T400` and `baseline_T250` were
+   re-scored on dev through the refactored path and reproduce their recorded EERs to
+   four decimals — 0.7979 / 1.2926 / 2.7801%, **delta 0.000000 pp** — with per-file
+   score agreement to ~1.5e-6. Ten training batches also run clean. The residual 1e-6
+   is float32 cuDNN algorithm-selection nondeterminism; EER is rank-based and so is
+   unaffected by it.
+
+### 7.3 Validating the Phase 7 scoring path without touching 2021
+
+`evaluate_2021` does not use `CQTDataset` — it windows raw variable-length arrays
+itself and batches them through several models at once. That path needed proving on
+data where the answer is already known. So dev CQTs were read from the Phase 6 packed
+blob **at natural length** (exactly the shape extraction yields), pushed through
+`score_chunk` exactly as the 2021 run will, and compared against each model's
+`dev_scores.csv`.
+
+**All 7 systems: correlation 1.0000000000, worst deviation 2.7e-5.** The 512-file
+sample spanned 119–1089 frames, so both the tile-pad and crop branches were
+exercised. Zero 2021 labels involved.
+
+### 7.4 A bug that silently discarded 11% of the data
+
+The first smoke run reported success while dropping **69 of 600 files (11.5%)** —
+68 of them `WinError 1455` (`ERROR_COMMITMENT_LIMIT`), the *same* commit-limit
+ceiling that rules out DataLoader workers (6.5).
+
+Cause: the extraction worker was defined in `evaluate_2021.py`, which imports torch.
+**joblib's loky workers import the module a function is defined in** in order to
+unpickle it, so all 8 workers were each loading torch and the CUDA runtime (~300 MB
+apiece) — something Phase 4 never did, because its worker lived in the torch-free
+`features.py`. Moving the worker to `features.extract_for_eval` fixed it outright:
+**0 failures** on re-run.
+
+Two things were changed as a result, and the second matters more than the first:
+
+- The worker's home is now load-bearing, and is documented as such in its docstring —
+  it is not a tidiness choice, and moving it back would silently reintroduce the bug.
+- **A chunk now counts as complete only when it holds a score for every file in it**,
+  not merely when its shard exists, plus a failure-rate guard that aborts loudly
+  rather than grinding on. The original design would have absorbed an 11% hole
+  straight into a headline EER with nothing surfacing as an error anywhere. Phase 4
+  decoded 241,056 files through this same ffmpeg path with zero failures, so any
+  sustained failure rate here means something environmental that re-running will not
+  fix and that must not be quietly tolerated. `--accept-failures` is the explicit
+  escape hatch once a failure is understood.
+
+### 7.5 Costs, measured — including one estimate that was wrong twice
+
+- **A benchmarking artifact, caught.** A first pass measured 175.5 ms/file and put
+  MFCC at 104.5 ms — which would have made 2021's *shorter* clips cost more per file
+  than 2019's longer ones, an obvious contradiction. It was librosa's lazy filterbank
+  construction on first call. Warm: **decode 28.7 ms + MFCC 3.6 ms + CQT 23.2 ms =
+  55.5 ms/file**.
+- **The parallel projection was still wrong.** Scaling 55.5 ms across 8 workers
+  predicted ~2.5 h; **measured steady state is 44 files/s** (91 s per 4,000-file
+  chunk), i.e. effective parallelism of only **2.4x**, giving **~6.2 h** for all
+  943,110 files. Two candidate fixes were tested rather than assumed: pinning BLAS/FFT
+  to one thread per worker gained 11% (36 → 40 files/s, now applied automatically),
+  and **12 workers measured no faster than 8** (39 vs 40 files/s), so the machine is
+  saturated at 8. The residual bottleneck is per-file ffmpeg process-spawn latency,
+  which on Windows includes Defender inspecting each launch.
+- GPU forward is not the constraint: 5.74 ms/sample for all 7 LCNNs (0.95 at T=400,
+  0.59 at T=250), ~1.5 h, overlapped with extraction by a one-chunk prefetch thread.
+- Classical pass: SVM ~3.56 ms/file, RF 0.40 ms/file → ~1.1 h.
+
+**Total ~7.3 h**, against the ~4.7 h originally sketched in `PROJECT_PLAN.md`.
+
+### 7.6 The 27GB caching decision was based on a wrong number
+
+`PROJECT_PLAN.md` 4.4 rejected caching 2021 CQT at an estimated ~27 GB. That assumed
+96 bins × 400 *padded* frames. Neither holds — `n_bins` is 90 (the Nyquist fix), and
+features are cached at natural length. At the measured mean of 149.4 frames the real
+cost is `90 × 149.4 × 943,110 = **12.7 GB**` for all partitions, against 32 GB free.
+Less than half the number the decision rested on.
+
+It is now cached, justified as **insurance rather than speed**: the dominant risk is
+finding a bug *after* a 6-hour pass, and cached, re-scoring all nine systems costs
+~1.5 h of GPU and no CPU. Written as one blob shard per chunk — a monolithic blob
+would need a ~25 GB merge and a transient 25.4 GB footprint against 32 GB free — with
+a `shard` column in the index. Pooled MFCC is cached too (~500 MB, 0.05% of the CQT
+figure). Cache integrity is verified by re-extracting random files and comparing
+byte-for-byte, as `pack_features.py` does: **25/25 identical** in the smoke run.
+
+### 7.7 A result already in hand, from 2019 dev only
+
+The short-clip control (`results/phase7/control_short_clips_2019dev.csv`) needs no
+2021 data, so it is already valid. Restricting 2019 dev to 2021-like durations:
+
+| system | all dev | ≤250 frames | ≤200 frames | ≤150 frames |
+|---|---|---|---|---|
+| MFCC-SVM | 9.216% | 13.139% | 15.120% | **17.021%** |
+| CQT-LCNN `flatten_T400` | 0.798% | 0.975% | 1.148% | **1.709%** |
+| n files | 65,097 | 27,813 | 11,878 | 1,999 |
+
+So **a 1.85x MFCC-SVM degradation is available from clip length alone**, with no
+domain shift whatsoever — which is exactly the mechanical 1/sqrt(T) pooling-noise
+effect predicted at the end of Phase 5. Any 2021 degradation must have this
+subtracted before it is attributed to simulated-vs-real replay.
+
+The LCNN result is the more interesting one and was *not* predicted: it degrades
+**2.14x**, proportionally more than the SVM. The Phase 5 prediction was specifically
+about pooled *statistics* getting noisier, which should not apply to a CNN consuming a
+spectrogram. The mechanism is different — a shorter clip supplies fewer genuinely
+distinct frames before tiling repeats them, so at T=400 a 150-frame file delivers
+~2.7 copies of the same evidence rather than 2.7x more evidence. Context, which 6.6
+showed to be worth more than every other factor combined, is what is actually being
+lost. This sharpens the transfer risk already flagged in 6.12 and makes prediction 1
+a genuinely open question rather than a formality.
+
+### 7.8 Two conventions for the condition breakdown, because the metadata forces it
+
+Verified directly against `trial_metadata.txt`: `room` (R1–R9) and `mic` (M1–M3) carry
+both classes, but `r`/`m`/`s`/`c` are `-` on **every** bonafide row — they describe the
+replay device, and a bonafide recording was never replayed through anything. `dist`
+splits by class too (`D1–D6` bonafide, `d1–d6` spoof), so the two are different
+physical quantities and must not share an axis.
+
+A spoof-only group has no FRR curve and therefore **no EER at all**, so some pooling is
+forced. `room`/`mic` get an ordinary within-group EER; replay-device factors pool *all*
+bonafide against each condition's spoof, which makes FRR(θ) identical in every group
+and lets only FAR(θ) move — so a difference between conditions is attributable purely
+to how detectable that condition's attacks are, and cannot be an artefact of one group
+holding easier genuine speech. **Caveat to carry into the write-up**: the shared
+bonafide half makes those EERs statistically *correlated*, so no test assuming
+independent groups applies. FAR at the single global EER threshold is reported
+alongside, since it needs no convention explained.
+
+### 7.9 Artifacts
+
+```
+results/phase7/   eer_table_2021.csv, eer_other_partitions.csv,
+                  condition_breakdown.{csv,png}, det_curves_2021.png,
+                  eer_comparison_2021.png, control_short_clips_2019dev.csv,
+                  control_duration_cue_2021.csv, registered_predictions.csv,
+                  summary.json
+                  scores/<system>.score.txt   (official ASVspoof format; gitignored)
+E:/ASVspoof/phase7_2021/   cqt/ (blob+index shards), mfcc/, lcnn_scores/,
+                           classical_scores/, merged parquets
+```
+
+`score.txt` exports are one per system in the official `FILENAME SCORE` format, same
+orientation as the four official baselines, so an examiner can recompute every
+reported number from a ~20 MB text file with no corpus, no GPU and no part of this
+pipeline.
+
+---
+
+Next: **run** Phase 7 (`src.evaluate_2021` → `src.score_classical_2021` →
+`src.report_2021`, ~7.3 h total, resumable), then write up the results against the
+nine pre-registered systems and the three registered predictions.

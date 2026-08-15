@@ -496,12 +496,30 @@ epoch would be far too slow. But the storage format matters a lot:
   **Actual cost, at natural variable length rather than a fixed 96×400: 6.3GB for the
   241,056-file pool** — less than the 8.4GB this section originally estimated, because
   most clips are shorter than a 400-frame window rather than needing padding up to it.
-- **Do NOT cache CQT features for the 2021 eval set at all.** Even quantized, 721,332
-  files (the `partition=="eval"` subset) at 96×400 uint8 would be ~27GB — a large chunk
-  of whatever's free on the data drive, for a set that's only passed through ONCE (final
-  scoring), not across many training epochs. Instead: extract → score → discard per
-  batch in a streaming loop, persisting only the tiny per-file score output (a few MB
-  total), never the spectrograms themselves.
+- ~~**Do NOT cache CQT features for the 2021 eval set at all.**~~ **REVERSED in Phase 7
+  — the 27GB figure was wrong.** The original estimate assumed 96 bins × 400 *padded*
+  frames per file. Neither holds: `n_bins` is 90 (the 4.3a Nyquist fix), and features
+  are cached at *natural* length (4.3b). Measured mean on 2021 is **149.4 frames**, so
+  the real cost is `90 × 149.4 × 943,110 = ~12.7GB` for **all** partitions — against
+  31.7GB free on E:. Less than half the number the decision was made on.
+
+  It is now cached, and the justification is **insurance, not speed**. The dominant
+  risk in Phase 7 is discovering a bug *after* a ~4h pass (a wrong crop, a
+  normalisation mismatch, a model rebuilt at the wrong T). Cached, re-scoring all nine
+  systems costs ~1.5h of GPU and no CPU; uncached it is another full extraction. The
+  write is nearly free, since the arrays already pass through the main process on
+  their way to the GPU. Stored as one blob shard per chunk (a monolithic blob would
+  need a ~25GB merge at the end), with a `shard` column in the index, and verified
+  byte-for-byte against fresh extractions exactly as `pack_features.py` does.
+
+  Honest caveat: a cached eval set lowers the friction to "just try one more thing on
+  2021". That is a discipline problem, not a technical one, and the pre-registration
+  above is what guards it.
+
+- **Pooled MFCC for 2021 IS cached** (~500MB for all partitions — 0.05% of the CQT
+  figure that drove the original decision). It decouples classical scoring from the
+  extraction pass, so libsvm does not contend with the 8 extraction workers for cores,
+  and makes the classical scores re-runnable without re-extraction.
 - **Phase 7 must extract once and score BOTH models in the same pass.** Measured in
   Phase 5: scoring all 721,332 eval files with the tuned SVM costs only ~0.7h
   (3.56 ms/file at 37,943 support vectors), whereas *extracting* their features costs
@@ -637,14 +655,46 @@ so nothing is selected post-hoc on eval results. All are scored in a **single
 extraction pass** (extract → score every model → discard), since the ~4h of feature
 extraction dominates and per-model scoring is ~0.7h.
 
+**AMENDED before the eval run, and before any 2021 score existed** (the amendment
+is recorded here rather than in the progress report precisely so it cannot be
+mistaken for a post-hoc addition). Three systems were added, all of them trained
+and frozen in Phase 5/6 — none is a new model, and none was chosen by looking at
+2021:
+
+- **`T400` (timepool, unit) — the matched control, and the important one.** As
+  originally written this table could not test two of its own three predictions.
+  `cmvn_T400` and `baseline_T250` are both *timepool* models while the primary
+  `flatten_T400` is *flatten*, so comparing either against the primary varies **two**
+  things at once — norm *and* head for prediction 3, T *and* head for prediction 1.
+  `T400` is timepool/unit, so `cmvn_T400` differs from it only in normalisation and
+  `baseline_T250` only in T. Without it, predictions 1 and 3 are confounded and no
+  honest verdict on either is possible.
+- **`T150`** completes the T axis (150/250/400, all timepool) for ~5 min of GPU.
+- **MFCC-RF**, the Phase 5 Random Forest, scored from the cached MFCC in ~6 min.
+
 | system | role | dev EER |
 |---|---|---|
 | `flatten_T400` | **primary** — best on dev | 0.798% |
+| `T400` (timepool) | **matched control** — makes predictions 1 and 3 testable | 0.902% |
+| `cmvn_T400` | hypothesis: may transfer better despite worse in-domain | 1.293% |
 | `flatten_T400_aug1` | mild waveform augmentation (50% clean) | 1.486% |
 | `flatten_T400_aug` | aggressive waveform augmentation (25% clean) | 2.353% |
 | `baseline_T250` | robustness — smallest 2019→2021 padding mismatch | 2.780% |
-| `cmvn_T400` | hypothesis: may transfer better despite worse in-domain | 1.293% |
+| `T150` | completes the T axis | 6.584% |
 | MFCC-SVM | Phase 5 classical baseline | 9.216% |
+| MFCC-RF | Phase 5 classical baseline | 11.736% |
+
+The primary system remains `flatten_T400` regardless of outcome. Adding systems
+cannot bias the headline as long as the headline is not later reselected from among
+them — and it is fixed here, in advance.
+
+**Disclosure for the defense.** A 600-file smoke test was run through the full
+pipeline before the real pass, to validate that it worked end to end. It produced
+2021 numbers over ~0.06% of the corpus. Those numbers selected nothing: all nine
+systems were already frozen and registered (in `src/config.py`) before it ran, the
+primary was already fixed, and no threshold, hyperparameter or model choice depends
+on them. Recorded because "did you look at eval before finalising?" deserves a
+documented answer rather than a reassurance.
 
 **Predictions stated in advance** (so either outcome is a result, not a rationalisation):
 1. **T=250 may beat T=400 on 2021** despite losing on dev, because T=400 tiles 2021
@@ -712,6 +762,27 @@ numbers:
 size, mic distance, replay device quality (a `groupby` + bar chart) — turns "does the
 model survive real physical replay conditions" into a specific, evidenced answer instead
 of one aggregate number.
+
+**Two conventions are needed, because half these factors are spoof-only.** Verified
+directly against `trial_metadata.txt`: `room` (R1-R9) and `mic` (M1-M3) are populated
+for bonafide *and* spoof, but `r`/`m`/`s`/`c` are `-` on every bonafide row — they
+describe the replay device, and a bonafide recording was never replayed through
+anything. `dist` splits by class too (`D1-D6` bonafide, `d1-d6` spoof), so the two
+are different quantities and must not share an axis.
+
+- **`room`, `mic` → within-group EER**, using that group's own bonafide and spoof.
+  Answers "how does the system perform in room R6", which is the stronger question.
+- **replay-device factors → pooled-bonafide EER**: all bonafide against each
+  condition's spoof. A group with no bonafide has no FRR curve and therefore no EER
+  at all, so some pooling is forced. Pooling *all* of them makes FRR(θ) literally the
+  same function in every group and lets only FAR(θ) move, so a difference between
+  conditions is attributable purely to how detectable that condition's attacks are,
+  and cannot be an artefact of one group holding easier genuine speech.
+  **Caveat to state**: the shared bonafide half makes these EERs statistically
+  *correlated*, so no test assuming independent groups may be applied to them.
+- Alongside both, **FAR at the single global EER threshold** is reported — no pooling
+  convention to explain, and it reads directly as "this share of that condition's
+  attacks got through at the operating point we report".
 
 ### Phase 8 — ASV extension (optional, only after CM is solid)
 1. Reuse ASV `.trn` enrollment files (2019) / `ASV/trial_metadata.txt` (2021) already

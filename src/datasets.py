@@ -22,6 +22,55 @@ from torch.utils.data import Dataset
 from . import config
 
 
+# --- Windowing / normalisation -------------------------------------------------
+# These two live at module level rather than as CQTDataset methods so that Phase 7's
+# streaming 2021 evaluation can apply the IDENTICAL transform. 2021 CQTs are never
+# written into the Phase 6 blob layout this Dataset reads, so Phase 7 cannot reuse
+# the class -- but any divergence between how dev was scored and how eval is scored
+# would invalidate the comparison between them, which is the entire point of Phase 7.
+# Sharing one code path makes that a fact rather than an assertion.
+
+
+def fit_length(x: np.ndarray, T: int, random_crop: bool = False,
+               rng: np.random.Generator | None = None) -> np.ndarray:
+    """Force a (bins, n) CQT to (bins, T).
+
+    Pad short clips by TILING, not zero-padding: a block of digital silence never
+    occurs in real speech and gives the CNN an artificial boundary to key on. Crop
+    long ones randomly when training (fresh window each epoch = free augmentation)
+    and centrally otherwise (deterministic, reproducible EER).
+    """
+    n = x.shape[1]
+    if n < T:
+        x = np.tile(x, (1, int(np.ceil(T / n))))
+        n = x.shape[1]
+    if n > T:
+        if random_crop:
+            if rng is None:
+                raise ValueError("random_crop=True requires an rng")
+            start = int(rng.integers(0, n - T + 1))
+        else:
+            start = (n - T) // 2
+        x = x[:, start:start + T]
+    return x
+
+
+def normalise(x: np.ndarray, norm: str) -> np.ndarray:
+    if norm == "unit":
+        # uint8 0-255 encodes dB in [-80, 0]; a fixed global rescale that
+        # preserves everything, including absolute level.
+        return x.astype(np.float32) / 255.0
+    if norm == "cmvn":
+        # Per-utterance, per-frequency-bin mean/variance normalisation. Standard
+        # in speech for removing channel effects -- but the replay fingerprint IS
+        # a channel effect, so this may erase the evidence. Run as an ablation.
+        x = x.astype(np.float32)
+        mu = x.mean(axis=1, keepdims=True)
+        sd = x.std(axis=1, keepdims=True)
+        return (x - mu) / (sd + 1e-5)
+    raise ValueError(f"unknown normalisation {norm!r}")
+
+
 class CQTDataset(Dataset):
     def __init__(self, split: str, train: bool, n_frames: int | None = None,
                  norm: str | None = None, augment: bool | None = None,
@@ -82,21 +131,6 @@ class CQTDataset(Dataset):
         raw = fh.read(config.CQT_N_BINS * n)
         return np.frombuffer(raw, dtype=np.uint8).reshape(config.CQT_N_BINS, n)
 
-    def _fit_length(self, x: np.ndarray) -> np.ndarray:
-        """Pad short clips by TILING, not zero-padding: a block of digital silence
-        never occurs in real speech and gives the CNN an artificial boundary to key
-        on. Crop long ones randomly when training (fresh window each epoch = free
-        augmentation) and centrally otherwise (deterministic, reproducible EER)."""
-        T, n = self.T, x.shape[1]
-        if n < T:
-            reps = int(np.ceil(T / n))
-            x = np.tile(x, (1, reps))
-            n = x.shape[1]
-        if n > T:
-            start = int(self._rng.integers(0, n - T + 1)) if self.train else (n - T) // 2
-            x = x[:, start:start + T]
-        return x
-
     def _specaugment(self, x: np.ndarray) -> np.ndarray:
         """Masks are written as 0 == the quietest dB value in our uint8 encoding,
         i.e. 'silence in this band/instant', which is the standard formulation."""
@@ -113,27 +147,14 @@ class CQTDataset(Dataset):
                 x[:, t0:t0 + w] = 0
         return x
 
-    def _normalise(self, x: np.ndarray) -> np.ndarray:
-        if self.norm == "unit":
-            # uint8 0-255 encodes dB in [-80, 0]; a fixed global rescale that
-            # preserves everything, including absolute level.
-            return x.astype(np.float32) / 255.0
-        if self.norm == "cmvn":
-            # Per-utterance, per-frequency-bin mean/variance normalisation. Standard
-            # in speech for removing channel effects -- but the replay fingerprint IS
-            # a channel effect, so this may erase the evidence. Run as an ablation.
-            x = x.astype(np.float32)
-            mu = x.mean(axis=1, keepdims=True)
-            sd = x.std(axis=1, keepdims=True)
-            return (x - mu) / (sd + 1e-5)
-        raise ValueError(f"unknown normalisation {self.norm!r}")
-
     def __getitem__(self, i: int):
         self._ensure_open()
-        x = self._fit_length(self._read(i))
+        # Random crop only while training; dev/eval get the deterministic centre
+        # crop. Phase 7 calls these same two functions on its streamed 2021 CQTs.
+        x = fit_length(self._read(i), self.T, random_crop=self.train, rng=self._rng)
         if self.augment:
             x = self._specaugment(x)
-        x = self._normalise(x)
+        x = normalise(x, self.norm)
         return torch.from_numpy(x).unsqueeze(0), torch.tensor(self.labels[i])
 
     def pos_weight(self) -> float:
