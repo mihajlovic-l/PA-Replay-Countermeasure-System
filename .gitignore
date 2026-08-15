@@ -37,6 +37,12 @@ env/
 .claude/
 .idea/
 
+# Exported session transcripts. Kept locally as a working reference for writing up
+# the thesis, but not published: they are raw conversation logs, they duplicate what
+# PROGRESS_REPORT.md records deliberately, and they can be regenerated at any time
+# from ~/.claude/projects/<project>/<session-id>.jsonl via export_conversation.py.
+conversation_export/
+
 # OS junk
 Thumbs.db
 .DS_Store
