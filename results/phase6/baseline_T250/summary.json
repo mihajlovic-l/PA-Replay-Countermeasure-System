@@ -1,0 +1,21 @@
+{
+  "tag": "baseline_T250",
+  "n_frames": 250,
+  "norm": "unit",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 28,
+  "epochs_run": 30,
+  "train_eer_at_best": 0.011904761904761911,
+  "eer": 0.027801361060051617,
+  "threshold": 0.905426,
+  "accuracy": 0.9721953392629461,
+  "precision_bonafide": 0.9059953627028817,
+  "recall_bonafide": 0.9722044501315135,
+  "f1_bonafide": 0.937932926411083,
+  "roc_auc": 0.9958852695954766,
+  "tp_bonafide_accepted": 13676,
+  "fn_bonafide_rejected": 391,
+  "tn_spoof_rejected": 49611,
+  "fp_spoof_accepted": 1419
+}

@@ -460,7 +460,19 @@ clips / randomly (train) or centrally (dev/eval) crops long ones on every access
 No length cap is applied: a full scan of all 241,056 files found only 0.748% exceed
 10s, and capping there would have saved ~17MB out of ~6.1GB.
 
-**4.3c — `CQT_FIXED_FRAMES` must come down from 400.** Measured on the real cache:
+**4.3c — `CQT_FIXED_FRAMES`: the initial call was ~250; the Phase 6 sweep overturned
+it and the project uses 400. Original reasoning and outcome both kept below.**
+
+> **OUTCOME.** Measured on dev: T=150 → 6.584%, T=250 → 2.780%, **T=400 → 0.902%**.
+> Context wins by a 7.3x margin. T=150 *underfits* (its train EER is also poor),
+> which rules out the competing "T=150 gets more crop diversity" explanation, and the
+> padding-asymmetry confound was quantified and dismissed (duration alone scores
+> 41.5% EER — near chance). The mismatch concern below is **not refuted**, just
+> located on the wrong axis: it is a *transfer* risk, invisible in-domain and
+> unmeasurable without touching 2021, so it is handled by pre-registration (see
+> Phase 7) rather than by picking a compromise value.
+
+Original reasoning — measured on the real cache:
 400 frames is a 6.40s window, but 2019 CQTs have a median of **267** frames and
 **90.8% are shorter than 400**; 2021 eval projects to ~149 frames (2.39s mean), its
 longest file barely reaching 439. Keeping 400 would mean padding 2019 by ~1.50x and
@@ -619,6 +631,31 @@ hyperparameter rather than copying ASR defaults — and the result is worth repo
 either way.
 
 ### Phase 7 — Evaluation
+**PRE-REGISTERED SYSTEMS — fixed before 2021 is touched.** 2021 PA eval is scored
+ONCE. To keep that honest, the systems and their roles are declared here in advance,
+so nothing is selected post-hoc on eval results. All are scored in a **single
+extraction pass** (extract → score every model → discard), since the ~4h of feature
+extraction dominates and per-model scoring is ~0.7h.
+
+| system | role | dev EER |
+|---|---|---|
+| `flatten_T400` | **primary** — best on dev | 0.798% |
+| `flatten_T400_aug1` | mild waveform augmentation (50% clean) | 1.486% |
+| `flatten_T400_aug` | aggressive waveform augmentation (25% clean) | 2.353% |
+| `baseline_T250` | robustness — smallest 2019→2021 padding mismatch | 2.780% |
+| `cmvn_T400` | hypothesis: may transfer better despite worse in-domain | 1.293% |
+| MFCC-SVM | Phase 5 classical baseline | 9.216% |
+
+**Predictions stated in advance** (so either outcome is a result, not a rationalisation):
+1. **T=250 may beat T=400 on 2021** despite losing on dev, because T=400 tiles 2021
+   clips ~2.7x versus ~1.4x on 2019 — the largest train/test padding mismatch.
+2. **Augmentation may help on 2021 despite hurting monotonically on dev.** It targets
+   the simulation shortcut, and dev is *also* simulated 2019 data, so the in-domain
+   cost is expected. This is the only place that hypothesis becomes testable.
+3. **CMVN may transfer better** for the same reason it hurt in-domain: it removes
+   recording-specific channel offsets, which plausibly differ most between simulated
+   and real replay.
+
 **Implemented in `src/metrics.py` (written in Phase 5, shared with Phase 7).** It fixes
 one convention project-wide: **higher score = more bonafide**, with 1 = bonafide as the
 positive class — matching the official baseline `score.txt` orientation so 7.4's

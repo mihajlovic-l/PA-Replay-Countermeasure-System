@@ -1,4 +1,4 @@
-# Progress Report — Phases 0 through 5
+# Progress Report — Phases 0 through 6
 
 This is a narrative log of what's actually been done in the repo so far, with the
 numbers that were verified and the bugs that came up along the way. `PROJECT_PLAN.md`
@@ -491,4 +491,427 @@ These are findings, not plans — the corresponding decisions are recorded in
 
 ---
 
-Next: **Phase 6**, the CQT-LCNN main system, per `PROJECT_PLAN.md` section 6.
+## Phase 6 — CQT-LCNN main system
+
+This is the thesis's actual contribution: the system whose front-end (CQT) is the
+variable under test, against Phase 5's MFCC baseline. Four new modules
+(`pack_features.py`, `datasets.py`, `models_lcnn.py`, `train_lcnn.py`), seven
+training runs, **51.7 hours of GPU time**.
+
+**Headline: dev EER 0.798%, versus the MFCC-SVM's 9.216% -- an 11.6x reduction
+(91.3% relative).** ROC-AUC 0.9996 versus 0.9684.
+
+### 6.0 Hardware constraints, measured before designing anything
+
+Three numbers shaped every subsequent decision, and none were what the plan assumed:
+
+- **System RAM is the binding constraint, not VRAM: 5.9 GB total, ~0.7 GB free.**
+  The GPU (GTX 1650, 4.29 GB VRAM, ~3.6 GB usable, CUDA 12.1, torch 2.5.1) never
+  came close to being the bottleneck.
+- **E: is an NVMe SSD** (WDC SN530), so random reads are cheap -- which turned out
+  to matter less than expected, see 6.1.
+- Compute capability 7.5, but on the **TU117** die -- see 6.5.
+
+### 6.1 The I/O problem, and `src/pack_features.py`
+
+The naive approach -- one `.npy` per file, loaded on demand -- is unusable here, and
+the reason is not what it appears to be. Measured cold on the real cache:
+
+| approach | per file | per epoch (175,959 files, 1 worker) |
+|---|---|---|
+| `np.load` | 10.32 ms | **30.3 min** |
+| `np.load(mmap_mode="r")` | 10.41 ms | 30.5 min -- **no benefit** |
+| random reads inside ONE open file | **0.27 ms** | **~0.8 min** |
+| warm re-read (page cache) | 0.17 ms | -- |
+
+mmap not helping is the diagnostic: if the cost were *data transfer*, memory-mapping
+would help. It doesn't, so the cost is **per-file-open overhead** -- syscall, Windows
+Defender inspection, and `.npy` header parsing -- paid 175,959 times per epoch.
+Reading inside an already-open handle is ~38x faster. And the page cache cannot
+rescue this: 4.6 GB of training data against 5.9 GB of total system RAM.
+
+So Phase 6 begins with a packing step. `pack_features.py` concatenates every file's
+CQT into **one contiguous `uint8` blob per split**, with a parquet index carrying
+`(filename, speaker_id, label, attack_id, env_id, offset, n_frames)`. Reading sample
+*i* becomes `seek(offset[i]) -> read(90 * n_frames[i]) -> reshape(90, n_frames[i])`.
+Records are variable-length (files genuinely differ), so the index is mandatory --
+position cannot be computed arithmetically.
+
+Result: **4.50 GB train + 1.65 GB dev**, built in ~40 min, and measured end-to-end
+through the Dataset at **0.334 ms/sample = 0.98 min/epoch, a 31x speedup**.
+
+The packer verifies 200 random files per split **byte-for-byte against the original
+`.npy`** before declaring success. A silent offset bug here would corrupt every
+training batch with no error surfacing anywhere, so this check is worth its few
+seconds. The original per-file cache is deliberately kept (E: has room), so the pack
+can be rebuilt without re-running Phase 4.
+
+### 6.2 `src/datasets.py` -- windowing, and why each choice
+
+**Fixed length.** A CNN batch requires identical shapes, but clips differ (median 267
+frames, range 92-1059). Every sample is forced to `CQT_FIXED_FRAMES`.
+
+**Short clips are TILED, not zero-padded.** Zero-padding appends a block of digital
+silence, which never occurs in real recordings -- it creates a sharp artificial
+boundary that a CNN will happily learn to detect instead of learning about replay.
+Tiling keeps the input statistically audio-like throughout.
+
+**Long clips are RANDOM-cropped when training, CENTRE-cropped otherwise.** The random
+crop is fresh every epoch, which is the entire reason Phase 4 cached variable-length
+arrays rather than baking in a fixed window. The deterministic centre crop keeps dev
+EER reproducible run to run.
+
+**SpecAugment** (training only) zeroes random frequency bands and time spans, forcing
+redundant representations -- essentially dropout in the input's structured domain.
+Flagged caveat: frequency masking could mask exactly the high-frequency band the
+thesis argues carries the fingerprint, so mask widths are config parameters to tune,
+not ASR defaults to copy.
+
+**Normalisation** is `x/255` (preserving everything, including absolute level) or
+per-utterance per-bin CMVN. See 6.8 -- this became an experiment rather than a choice.
+
+Each sample is returned as `(1, 90, T)`: the leading 1 is the **channel** axis, since
+`Conv2d` expects `(batch, channels, height, width)` and a spectrogram is a
+single-channel image.
+
+### 6.3 `src/models_lcnn.py` -- LCNN-9
+
+Layer sizes follow the original LCNN recipe, which is also the backbone of the
+official ASVspoof **LFCC-LCNN** baseline. That choice is deliberate and is about
+experimental design, not convenience: keeping the backend identical to a published
+baseline means the eventual comparison **isolates exactly one variable, the
+front-end**. Substituting e.g. ResNet-18 would change two things at once and make
+any difference unattributable -- which would gut the thesis's central claim.
+
+**Max-Feature-Map (MFM)** is the defining component. Given `2N` channels it splits
+them in half and takes the elementwise maximum, halving the channel count. Where
+ReLU compares each activation against a *fixed* threshold of zero (destroying
+everything negative), MFM compares two *learned* feature maps against each other and
+keeps the winner. Three consequences: it is a competitive, data-driven feature
+selection rather than a fixed rule; informative negative-going responses survive;
+and there are no dead units, since gradient always flows to whichever branch won.
+This suits replay detection specifically, where the evidence is subtle
+small-magnitude spectral deviation that a hard zero threshold could discard. The
+halving is also what makes LCNN "light" -- each conv sees half the channels the
+previous one produced.
+
+Nine conv layers, four 2x2 pools -- note the convs are shape-neutral (padded), so
+pooling alone controls resolution while the convs and MFM control channel depth. At
+T=400 the frequency axis goes 90->45->22->11->5 and the time axis 400->200->100->50
+->25, giving a final `(32, 5, 25)`. A final unit's **receptive field is
+64x64 input pixels**: 64 of 90 frequency bins and 64 frames (~1.0 s of audio). The
+1x1 convs are channel-mixing bottlenecks -- 9x cheaper than 3x3 -- that reorganise
+channels before the expensive spatial filtering.
+
+**Two heads are implemented**, and this is a real experimental axis (6.7):
+- `timepool` -- `AdaptiveAvgPool2d((F,1))`, collapsing time to give `C*F = 160`
+  features **independent of T**, preserving the frequency axis.
+- `flatten` -- the paper's original head, `C*F*T` features, so parameter count
+  **scales with T**.
+
+The post-conv shape is **inferred by pushing a dummy tensor through the stack**
+rather than hardcoded, so changing T or the bin count cannot silently produce a
+wrong `Linear` size -- a failure that would surface as a confusing mid-training
+dimension error, or worse, as a wrong-but-runnable layer.
+
+### 6.4 `src/train_lcnn.py` -- protocol
+
+`BCEWithLogitsLoss(pos_weight=3.699)` on a single logit. `pos_weight` is
+`n_spoof/n_bonafide`, the same imbalance strategy as Phase 5's
+`class_weight="balanced"`. The fused "WithLogits" form is numerically stable: a
+separate sigmoid can saturate to exactly 0 or 1 in float precision, making `log(0)`
+produce NaN.
+
+**Single logit rather than 2-class softmax**: for binary classification these are
+near-equivalent (a 2-class softmax depends only on `z1 - z0`, so it learns one
+number parameterised by two). Single logit gives the EER score directly with no
+post-processing and removes a place where a sign error could silently invert every
+metric.
+
+Adam with `ReduceLROnPlateau` **scheduled on dev EER, not dev loss**. Under 3.7:1
+imbalance the loss is dominated by the majority class and can improve while the
+bonafide-vs-spoof *ranking* -- which is what EER measures and what we report -- gets
+worse. This mattered in practice: in the T=250 run the first LR halving at epoch 24
+immediately took dev EER from ~4.4% to 2.8%.
+
+Two checkpoints per run: `_best.pt` (weights at best dev EER, for Phase 7) and a
+rolling one carrying **optimizer, scheduler and scaler state** for exact resumption.
+The latter made the T400 extension possible (30 -> 45 epochs, continuing from the
+existing LR level rather than restarting hot).
+
+**Train EER is measured on a 20,000-file training subsample with augmentation OFF and
+a centre crop** -- i.e. scored exactly like dev. Measuring it under augmentation
+would compare two different tasks and make the train/dev gap meaningless. That gap
+was the planned augmentation diagnostic (see 6.9 for why it could not answer the
+question it was built for).
+
+### 6.5 Infrastructure findings (all measured, all contradicted expectations)
+
+**AMP is 2.8x SLOWER on this GPU, not faster.** 227.8 ms/batch with AMP versus
+82.3 ms without. The GTX 1650 uses the **TU117** die, which -- unlike the rest of the
+Turing family -- **has no tensor cores**, so FP16 buys no arithmetic speedup while
+still paying the cast overhead. Its real benefit is memory (peak 0.40 GB vs 0.84 GB),
+and memory was never the constraint. `LCNN_USE_AMP = False`. The `GradScaler` is kept
+in the loop as a transparent pass-through so the code is identical either way and one
+config flag would re-enable it on tensor-core hardware.
+
+**Batch 32 is optimal; 128+ falls off a cliff.**
+
+| batch | ms/sample | peak VRAM | est. min/epoch |
+|---|---|---|---|
+| 32 | 2.60 | 0.84 GB | **7.6** |
+| 64 | 2.97 | 2.32 GB | 8.7 |
+| 128 | 21.55 | 4.61 GB | 63.2 |
+| 256 | 45.32 | 6.10 GB | 132.9 |
+
+128 and 256 report *more allocated memory than the card physically has* (4.29 GB),
+meaning PyTorch spills into shared host memory -- doubly punishing on a machine with
+5.9 GB of system RAM. An 8-25x slowdown, not a graceful degradation.
+
+**DataLoader workers fail outright.** `num_workers=2` raised Windows **error 1455
+(`ERROR_COMMITMENT_LIMIT`, "the paging file is too small")**. Workers are separate
+processes that return batches through shared-memory file mappings, and 5.9 GB total
+RAM cannot commit them. `LCNN_NUM_WORKERS = 0`; the cost is ~11%, since loading is
+10.7 ms/batch against 83 ms of GPU work.
+
+### 6.6 The T sweep -- context dominates everything
+
+Run with the `timepool` head specifically so parameter count stays **constant across
+T** (184,017). With `flatten` it would have grown 388,817 -> 542,417 -> 798,417,
+confounding "more context" with "more capacity".
+
+| T | window | dev EER | train EER | best epoch |
+|---|---|---|---|---|
+| 150 | 2.4 s | 6.584% | 4.522% | 13 (early-stopped 21) |
+| 250 | 4.0 s | 2.780% | 1.190% | 28 |
+| 400 | 6.4 s | **0.902%** | 0.122% | 43 (extended to 45) |
+
+A **7.3x range** -- larger than every other factor combined.
+
+**T=150 UNDERFITS rather than overfitting**: its train EER (4.522%) is also terrible.
+That rules out the competing explanation, because T=150 actually receives *more*
+augmentation diversity (with a 267-frame median, nearly every file is randomly
+cropped at T=150 versus about half at T=250). It lost anyway, so **context is worth
+far more than crop diversity**. Mechanistically this fits the 64-frame receptive
+field: T=150 gives ~2 receptive fields of context to integrate, T=400 gives ~6, and a
+loudspeaker's frequency signature is stationary enough that evidence accumulates.
+
+**This overturned a recommendation made in this document.** Section 4.3c argued for
+T~250 to minimise the 2019/2021 padding mismatch. The measurement says 400,
+decisively. The mismatch concern remains real but is a *Phase 7 transfer* risk, not
+an in-domain one -- see 6.10.
+
+### 6.7 Head: flatten beats time-pooling
+
+| | timepool | flatten |
+|---|---|---|
+| dev EER | 0.902% | **0.798%** |
+| train EER | 0.122% | 0.238% |
+| epochs to best | 43 | **23** |
+| total time | 11.08 h | **7.32 h** |
+| params | 184,017 | 798,417 |
+
+The prediction recorded before running this was that the 4.3x larger head would
+overfit. **It did the opposite**, and the diagnostic explains why: timepool reaches a
+*better* train EER while generalising *worse*. Capacity was never the problem --
+**pooling destroys information**. Averaging across time discards *where in the
+utterance* each feature fired, and that localisation carries real signal, plausibly
+transient loudspeaker behaviour at onsets that a time-average smears away.
+
+To make this comparison airtight, timepool was extended past its 30-epoch cap (it was
+still improving when truncated, while flatten had genuinely converged with 7 flat
+epochs). The extension gained 11.8% relative (1.023% -> 0.902%) across two further LR
+drops and then plateaued -- flatten still wins, on final EER, on epochs required, and
+on wall-clock.
+
+Choosing `timepool` for the T sweep was nonetheless correct: it kept parameters
+constant. `flatten` is only a fair comparison once T is fixed. The two decisions do
+not conflict.
+
+### 6.8 CMVN removes the evidence
+
+| | `unit` (x/255) | CMVN |
+|---|---|---|
+| dev EER | 0.902% | 1.293% |
+| train EER | 0.122% | 0.330% |
+| final train loss | -- | higher |
+
+CMVN costs **43% relative** at a matched (timepool) head. The decisive detail is that
+it is worse **on training data too**, which distinguishes two explanations: a
+regulariser fits train worse but generalises better, whereas CMVN fits train worse
+*and* dev worse. It is **destroying information, not regularising**.
+
+And the information it destroys is precisely identifiable: the per-utterance,
+per-frequency-bin mean -- the stationary spectral level in each band, which is exactly
+what a loudspeaker and microphone's frequency response imposes on a recording.
+
+**This is direct mechanistic support for the thesis's central premise**: the replay
+fingerprint lives substantially in the stationary per-band spectral level, and
+removing it measurably degrades detection. Stronger than citing the claim from
+literature, because it is measured on this system. The modest magnitude also matters
+for honesty -- at 43% the channel signature clearly contributes but is not the whole
+story, since the model still reaches 1.293% without it.
+
+### 6.9 Waveform augmentation -- a clean dose-response, and an unresolvable question
+
+`src/augment_waveform.py` pre-computes augmented copies of the **training split only**
+(dev/eval are always evaluated clean). Each copy is an independent random draw: every
+file gets its own randomly-sampled chain, with randomised parameters, from:
+
+| effect | stands in for | detail |
+|---|---|---|
+| additive noise | real mic self-noise | SNR 10-30 dB, half low-pass filtered so it is not always spectrally flat |
+| RIR convolution | rooms beyond the shoebox model | exponentially-decaying noise, RT60 0.08-0.5 s, deliberately NOT a shoebox |
+| soft clipping | loudspeaker nonlinearity | `tanh` saturation or hard clip; simulation's device responses are perfectly linear |
+| MP3/AAC round-trip | recording-chain processing | 64-192 kbps via ffmpeg; codecs discard "inaudible" high-frequency detail -- exactly where the fingerprint lives |
+
+Effect order is shuffled, since *clipping then room* is physically different from
+*room then clipping*.
+
+**Why pre-compute rather than augment on the fly**: these need the waveform, but
+Phase 4 cached CQTs. Re-decoding every epoch costs ~1 h/epoch (~20 h per run), and
+Phase 6 involved seven runs -- so on-the-fly would have cost ~140 h against a one-time
+~1.3 h. The performance gap is also smaller than it appears, because fresh random
+crops and SpecAugment are applied on top regardless, so the model never sees a
+byte-identical input twice under either scheme.
+
+**Augmented waveforms are trimmed back to the original length before the CQT**, so
+every copy shares the existing index -- identical offsets, identical frame counts.
+`cqt_train_aug1.dat` is byte-identical in size to `cqt_train.dat` (4,500,426,060).
+This makes all four blobs interchangeable in layout, and is also what allowed
+within-copy resume from file size alone.
+
+At load time the Dataset draws **uniformly at random among {clean, aug1..N}, per
+access, independently** -- not a cycle. The same file may draw `aug1, clean, aug3,
+aug1` across epochs. Over 30 epochs the chance a file never sees a given variant is
+`0.75^30 ~ 0.018%` (~31 of 175,959 files), so coverage is effectively complete without
+enforcing it. Keeping **clean in the pool** is deliberate: training exclusively on
+perturbed audio would adapt the model to a distribution neither dev nor 2021 has.
+
+Results, all at flatten/T400:
+
+| clean fraction | dev EER | train EER |
+|---|---|---|
+| 100% (none) | **0.798%** | 0.238% |
+| 50% (1 copy) | 1.486% | 0.394% |
+| 25% (3 copies) | 2.353% | 0.986% |
+
+**Monotonic: every increment of augmentation costs in-domain accuracy.**
+
+**But this cannot settle whether augmentation succeeded**, and that limitation is
+structural rather than a shortcoming of the runs. Augmentation targets the
+**simulation shortcut** -- 2019 PA is entirely simulated, so a high-capacity CNN can
+score well by keying on simulator regularities (one small family of synthetic RIRs
+and device curves) that will not exist in 2021's real re-recordings. **Dev is also
+simulated 2019 data.** A model leaning on those regularities therefore looks *better*
+on dev, not worse. In-domain degradation is exactly what forcing a model off a
+still-profitable shortcut looks like.
+
+So the train/dev gap diagnostic designed in the plan measures only **within-domain
+memorisation**, and is blind by construction to the thing waveform augmentation
+exists to fix. **Only 2021 can resolve it** -- which is why all three points on the
+axis are carried into Phase 7 as pre-registered systems.
+
+### 6.10 Confounds checked
+
+**Padding asymmetry (checked and dismissed).** Bonafide files are systematically
+longer than spoof (train 323 vs 274 frames; dev 337 vs 266), so the fraction needing
+tile-padding diverges with T:
+
+| | bonafide padded | spoof padded | asymmetry |
+|---|---|---|---|
+| T=150 | 2.3% | 2.3% | +0.1 pp |
+| T=250 | 34.8% | 40.5% | -5.7 pp |
+| T=400 | 76.1% | 94.3% | **-18.2 pp** |
+
+Tiling creates exact periodicity, which a CNN can detect -- so "is this repeating?"
+could act as a proxy for "is this spoof?". Alarmingly, the asymmetry ordering matches
+the performance ordering exactly. **Quantified and ruled out**: duration alone scores
+**41.494% EER** (AUC 0.6335) and the tiling factor alone **48.329%** -- essentially
+chance, against the model's 1.023%. A model exploiting only that cue could not reach
+1%. The T-sweep gain is genuine context benefit. Worth recording in the thesis as a
+confound explicitly tested rather than assumed away.
+
+**A latent seed collision (found, assessed, left alone).** Augmentation seeds are
+`RANDOM_SEED + 100000*copy + i`, but there are 175,959 files -- so copy 1's tail
+overlaps copy 2's head (copy1/file100000 and copy2/file0 both get seed 200042).
+Harmless in the way that matters: no single *file* ever gets the same seed in two
+copies (those differ by exactly 100,000), so the three copies of any file remain
+genuinely different -- verified by hashing. The collision is between *different files
+in different copies*, which share augmentation parameters applied to different audio.
+~76,000 such pairs; negligible effect on parameter diversity. Not worth a 1.3 h
+rebuild that would also invalidate the trained augmented models. Fix if ever
+regenerating: multiplier `1_000_000`.
+
+**Augmentation determinism (verified).** Per-file seeding makes `--force` rebuilds
+byte-identical, confirmed by hashing, including through ffmpeg codec round-trips. The
+per-task seeding is load-bearing: with a single shared RNG the 8 joblib workers would
+consume random numbers in nondeterministic interleaving, so results would vary run to
+run despite a "fixed" seed.
+
+### 6.11 Full results
+
+| run | T | variant | params | dev EER | train EER | ratio | best ep | ROC-AUC | hours |
+|---|---|---|---|---|---|---|---|---|---|
+| T150 | 150 | timepool | 184,017 | 6.584% | 4.522% | 0.69 | 13 | 0.9808 | 2.19 |
+| baseline_T250 | 250 | timepool | 184,017 | 2.780% | 1.190% | 0.43 | 28 | 0.9959 | 4.79 |
+| T400 | 400 | timepool | 184,017 | 0.902% | 0.122% | 0.14 | 43 | 0.9995 | 11.08 |
+| cmvn_T400 | 400 | timepool+CMVN | 184,017 | 1.293% | 0.330% | 0.26 | 30 | 0.9989 | 7.73 |
+| **flatten_T400** | 400 | **flatten** | 798,417 | **0.798%** | 0.238% | 0.30 | 23 | **0.9996** | 7.32 |
+| flatten_T400_aug1 | 400 | flatten+wavaug x1 | 798,417 | 1.486% | 0.394% | 0.26 | 41 | 0.9987 | 11.26 |
+| flatten_T400_aug | 400 | flatten+wavaug x3 | 798,417 | 2.353% | 0.986% | 0.42 | 29 | 0.9968 | 7.30 |
+
+Winner `flatten_T400`: dev EER **0.798%**, confusion matrix balanced at the EER
+threshold (FNR 0.796% = 112/14,067; FPR 0.799% = 408/51,030).
+
+**Comparison against Phase 5** (same dev split, same metric, same convention):
+
+| system | dev EER | ROC-AUC |
+|---|---|---|
+| MFCC-SVM (RBF, tuned, full train) | 9.216% | 0.9684 |
+| MFCC-RF (full train) | 11.736% | 0.9548 |
+| **CQT-LCNN (flatten, T=400)** | **0.798%** | **0.9996** |
+
+### 6.12 Caveats to carry into the write-up
+
+- **Dev has absorbed heavy selection pressure.** Phase 5 evaluated 112 SVM
+  configurations against it; Phase 6 adds seven more systems plus per-epoch
+  checkpoint selection. Dev EER is a *tuning* number, not a generalisation estimate.
+  2021 remains untouched and is the only clean figure.
+- **Unequal epoch budgets.** `aug1` ran 45 epochs against its control's 30 (each to
+  convergence, but budgets differ), and `aug3` was truncated at its cap while still
+  creeping down -- extended it might reach ~2.2%. Neither changes the monotonic
+  conclusion, but both should be stated.
+- **T=400 maximises the 2019->2021 mismatch.** 2021 clips average ~149 frames, so at
+  T=400 essentially every 2021 file is tiled ~2.7x versus ~1.4x on 2019. The
+  best in-domain configuration carries the largest transfer risk, and that cannot be
+  measured without touching 2021. Hence the pre-registration in
+  `PROJECT_PLAN.md` phase 7: T=400 is the primary system, T=250 a documented
+  robustness check, with the prediction *stated in advance* that T=250 may transfer
+  better. Registering it beforehand means either outcome is an honest result rather
+  than eval-tuning.
+
+### 6.13 Artifacts
+
+Results are now grouped per phase, and within Phase 5 per model family, rather than
+distinguished only by filename prefix:
+
+```
+results/phase5/summary.{md,json}
+             /svm/  sweep.csv, sweep.png, grid_search_legacy.csv, dev_scores.csv
+             /rf/   curve.csv, feature_importance.png, n_estimators.{csv,png}, dev_scores_*.csv
+results/phase6/<tag>/  log.csv, curves.png, summary.json, dev_scores.csv
+models/phase5/  svm_mfcc.joblib, rf_mfcc_full.joblib, rf_mfcc_sub_<n>.joblib
+models/phase6/  lcnn_<tag>.pt, lcnn_<tag>_best.pt
+E:/ASVspoof/packed/  cqt_{train,dev}.dat + indices, cqt_train_aug{1,2,3}.dat
+```
+
+`models/` (1.7 GB) and every `dev_scores*.csv` are gitignored. Note the ignore
+pattern needed `**/dev_scores*.csv`: a single `*` does not cross directory
+separators, so the previous `results/*dev_scores*.csv` silently failed to match the
+nested Phase 6 files.
+
+---
+
+Next: **Phase 7**, evaluation on the held-out 2021 PA eval set, per
+`PROJECT_PLAN.md` section 6.

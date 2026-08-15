@@ -13,13 +13,20 @@ been done so far (with numbers, decisions, and bugs found/fixed) lives in
 
 ## Status
 
-**Phases 0–5 complete** (environment setup, manifest building, speaker-disjoint
-resplitting, EDA, DSP feature extraction, classical MFCC baseline). Next up: Phase 6,
-the CQT-LCNN main system.
+**Phases 0–6 complete** (environment setup, manifest building, speaker-disjoint
+resplitting, EDA, DSP feature extraction, classical MFCC baseline, CQT-LCNN main
+system). Next up: Phase 7, evaluation on the held-out ASVspoof2021 PA eval set.
 
-Current best classical baseline: **MFCC-SVM (RBF), 9.216% EER** on the speaker-disjoint
-2019 dev split — a *tuning* number, not a generalisation estimate. The held-out
-ASVspoof2021 PA eval set remains untouched until Phase 7.
+| system | dev EER | ROC-AUC |
+|---|---|---|
+| MFCC-SVM (Phase 5 baseline) | 9.216% | 0.9684 |
+| **CQT-LCNN (Phase 6 main system)** | **0.798%** | **0.9996** |
+
+An **11.6x reduction** — the thesis's central claim, that constant-Q features retain
+the replay fingerprint that mel-scaled features discard. These are *tuning* numbers on
+the speaker-disjoint 2019 dev split, not generalisation estimates: the 2021 PA eval set
+remains untouched until Phase 7, where the systems are scored once against a
+pre-registered list.
 
 ## Repo layout
 
@@ -31,11 +38,16 @@ src/
   eda.py             -- Phase 3: exploratory data analysis, writes plots to EDA/
   features.py        -- Phase 4: MFCC + CQT extraction, cached to E:\ASVspoof\features
   metrics.py         -- EER + supplementary metrics (Phase 5, shared with Phase 7)
-  train_classical.py -- Phase 5: SVM/RF factorial sweep, writes to results/
+  train_classical.py -- Phase 5: SVM/RF factorial sweep
+  pack_features.py   -- Phase 6: pack per-file CQTs into one blob per split (31x faster I/O)
+  augment_waveform.py-- Phase 6: pre-computed waveform augmentation copies
+  datasets.py        -- Phase 6: torch Dataset (pad/crop, SpecAugment, normalisation)
+  models_lcnn.py     -- Phase 6: LCNN-9 with Max-Feature-Map activations
+  train_lcnn.py      -- Phase 6: training loop, EER-scheduled, resumable
 EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
 explanations/   -- teaching figures (e.g. how ROC-AUC relates to pairwise ranking)
-results/        -- summaries, aggregate tables and figures (tracked); bulky per-file
-                   score dumps are gitignored
+results/        -- grouped per phase (phase5/{svm,rf}/, phase6/<run>/); summaries,
+                   tables and figures tracked, bulky per-file score dumps gitignored
 PROJECT_PLAN.md     -- full thesis plan, reasoning, and dataset breakdown
 PROGRESS_REPORT.md  -- detailed log of work completed so far
 
@@ -63,6 +75,9 @@ manifests/, splits/, models/  -- generated artifacts (gitignored; reproducible b
   python -m src.eda
   python -m src.features
   python -m src.train_classical      # add --force to recompute instead of resuming
+  python -m src.pack_features        # Phase 6 prerequisite
+  python -m src.augment_waveform     # optional: waveform-augmented copies
+  python -m src.train_lcnn --tag flatten_T400 --n-frames 400 --head flatten
   ```
 - The long-running phases (`features`, `train_classical`) are **resumable**: completed
   work is cached and skipped on re-run, so an interrupt costs at most the one item in

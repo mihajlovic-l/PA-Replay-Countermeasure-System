@@ -1,0 +1,21 @@
+{
+  "tag": "flatten_T400_aug",
+  "n_frames": 400,
+  "norm": "unit",
+  "head": "flatten",
+  "params": 798417,
+  "best_epoch": 29,
+  "epochs_run": 30,
+  "train_eer_at_best": 0.009861811391223147,
+  "eer": 0.023532711742706783,
+  "threshold": 2.166308,
+  "accuracy": 0.9764658893651013,
+  "precision_bonafide": 0.9195956350003347,
+  "recall_bonafide": 0.9764697519016137,
+  "f1_bonafide": 0.9471796993518136,
+  "roc_auc": 0.9968049535229355,
+  "tp_bonafide_accepted": 13736,
+  "fn_bonafide_rejected": 331,
+  "tn_spoof_rejected": 49829,
+  "fp_spoof_accepted": 1201
+}

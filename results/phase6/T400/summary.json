@@ -1,0 +1,21 @@
+{
+  "tag": "T400",
+  "n_frames": 400,
+  "norm": "unit",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 43,
+  "epochs_run": 45,
+  "train_eer_at_best": 0.001223155929038302,
+  "eer": 0.009021263695323554,
+  "threshold": 2.4530368,
+  "accuracy": 0.9909826873742261,
+  "precision_bonafide": 0.9680555555555556,
+  "recall_bonafide": 0.9909717779199545,
+  "f1_bonafide": 0.9793796325569958,
+  "roc_auc": 0.9994795699386692,
+  "tp_bonafide_accepted": 13940,
+  "fn_bonafide_rejected": 127,
+  "tn_spoof_rejected": 50570,
+  "fp_spoof_accepted": 460
+}

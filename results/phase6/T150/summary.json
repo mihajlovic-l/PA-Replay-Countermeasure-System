@@ -1,0 +1,21 @@
+{
+  "tag": "T150",
+  "n_frames": 150,
+  "norm": "unit",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 13,
+  "epochs_run": 21,
+  "train_eer_at_best": 0.045223155929038264,
+  "eer": 0.06583572269219527,
+  "threshold": 1.5227989,
+  "accuracy": 0.9341597923099375,
+  "precision_bonafide": 0.7963759772135022,
+  "recall_bonafide": 0.9341721760147864,
+  "f1_bonafide": 0.8597880136090029,
+  "roc_auc": 0.9807590263170567,
+  "tp_bonafide_accepted": 13141,
+  "fn_bonafide_rejected": 926,
+  "tn_spoof_rejected": 47670,
+  "fp_spoof_accepted": 3360
+}

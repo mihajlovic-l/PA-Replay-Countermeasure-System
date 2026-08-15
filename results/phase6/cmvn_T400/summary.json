@@ -1,0 +1,21 @@
+{
+  "tag": "cmvn_T400",
+  "n_frames": 400,
+  "norm": "cmvn",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 30,
+  "epochs_run": 30,
+  "train_eer_at_best": 0.0032978524743230413,
+  "eer": 0.01292602710460106,
+  "threshold": 1.788088,
+  "accuracy": 0.9870808178564296,
+  "precision_bonafide": 0.9546892189218922,
+  "recall_bonafide": 0.9870619179640293,
+  "f1_bonafide": 0.9706057110901402,
+  "roc_auc": 0.9988830685030617,
+  "tp_bonafide_accepted": 13885,
+  "fn_bonafide_rejected": 182,
+  "tn_spoof_rejected": 50371,
+  "fp_spoof_accepted": 659
+}

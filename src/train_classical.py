@@ -48,22 +48,25 @@ from . import config, metrics
 MFCC_PARQUET = config.FEATURES_DIR / "mfcc" / "pooled_mfcc.parquet"
 MFCC_COLS = [f"mfcc_{i}" for i in range(120)]
 
-SWEEP_CSV = config.RESULTS_DIR / "phase5_svm_sweep.csv"
-LEGACY_GRID_CSV = config.RESULTS_DIR / "phase5_grid_search.csv"
-RF_CURVE_CSV = config.RESULTS_DIR / "phase5_rf_curve.csv"
-SWEEP_PNG = config.RESULTS_DIR / "phase5_svm_sweep.png"
-RF_IMPORTANCE_PNG = config.RESULTS_DIR / "phase5_rf_feature_importance.png"
-SUMMARY_MD = config.RESULTS_DIR / "phase5_summary.md"
-SUMMARY_JSON = config.RESULTS_DIR / "phase5_summary.json"
+SWEEP_CSV = config.PHASE5_SVM_DIR / "sweep.csv"
+LEGACY_GRID_CSV = config.PHASE5_SVM_DIR / "grid_search_legacy.csv"
+SWEEP_PNG = config.PHASE5_SVM_DIR / "sweep.png"
+SVM_DEV_SCORES = config.PHASE5_SVM_DIR / "dev_scores.csv"
 
-SVM_MODEL = config.MODELS_DIR / "svm_mfcc.joblib"
-RF_FULL_MODEL = config.MODELS_DIR / "rf_mfcc_full.joblib"
+RF_CURVE_CSV = config.PHASE5_RF_DIR / "curve.csv"
+RF_IMPORTANCE_PNG = config.PHASE5_RF_DIR / "feature_importance.png"
+
+SUMMARY_MD = config.PHASE5_DIR / "summary.md"
+SUMMARY_JSON = config.PHASE5_DIR / "summary.json"
+
+SVM_MODEL = config.PHASE5_MODELS_DIR / "svm_mfcc.joblib"
+RF_FULL_MODEL = config.PHASE5_MODELS_DIR / "rf_mfcc_full.joblib"
 
 
 def rf_sub_model_path(n_train: int):
     """RF checkpoint keyed by n_train, so a size change can never silently reuse
     a model trained at a different size under the new label."""
-    return config.MODELS_DIR / f"rf_mfcc_sub_{n_train}.joblib"
+    return config.PHASE5_MODELS_DIR / f"rf_mfcc_sub_{n_train}.joblib"
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +256,7 @@ def refit_best(sweep: pd.DataFrame, data) -> dict:
     joblib.dump(res["pipeline"], SVM_MODEL)
     pd.DataFrame({"filename": dv_names, "score": res["scores"],
                   "label": np.where(ydv == 1, "bonafide", "spoof")}
-                 ).to_csv(config.RESULTS_DIR / "phase5_dev_scores_svm.csv", index=False)
+                 ).to_csv(SVM_DEV_SCORES, index=False)
     return {"n_train": n, "C": C, "gamma": gamma, "scores": res["scores"],
             "eer": res["eer"], "is_full_train": n == len(ytr)}
 
@@ -326,7 +329,7 @@ def run_rf_curve(data, force: bool) -> pd.DataFrame:
         tag = "full" if n == len(ytr) else str(n)
         pd.DataFrame({"filename": dv_names, "score": scores,
                       "label": np.where(ydv == 1, "bonafide", "spoof")}
-                     ).to_csv(config.RESULTS_DIR / f"phase5_dev_scores_rf_{tag}.csv", index=False)
+                     ).to_csv(config.PHASE5_RF_DIR / f"dev_scores_{tag}.csv", index=False)
 
         rows.append({"n_train": n, "is_full": n == len(ytr), **report})
         pd.DataFrame(rows).to_csv(RF_CURVE_CSV, index=False)
@@ -525,9 +528,9 @@ def write_summary(sweep, rf_curve, best, edges, data):
         "",
         "- `models/svm_mfcc.joblib` — winning Pipeline (scaler + SVC), all 120 features",
         "- `models/rf_mfcc_full.joblib`, `models/rf_mfcc_sub_<n>.joblib`",
-        "- `results/phase5_svm_sweep.csv` — every sweep point (the authoritative table)",
-        "- `results/phase5_rf_curve.csv`, `results/phase5_dev_scores_*.csv`",
-        "- `results/phase5_svm_sweep.png`, `results/phase5_rf_feature_importance.png`",
+        "- `results/phase5/svm/sweep.csv` — every sweep point (the authoritative table)",
+        "- `results/phase5/rf/curve.csv`, `results/phase5/*/dev_scores*.csv`",
+        "- `results/phase5/svm/sweep.png`, `results/phase5/rf/feature_importance.png`",
     ]
     SUMMARY_MD.write_text("\n".join(lines), encoding="utf-8")
 
