@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import warnings
 
 import imageio_ffmpeg
 import librosa
 import numpy as np
 import pandas as pd
+import soundfile
 from joblib import Parallel, delayed
 
 from . import config
@@ -42,12 +44,34 @@ MFCC_DIR.mkdir(parents=True, exist_ok=True)
 MFCC_PARQUET = MFCC_DIR / "pooled_mfcc.parquet"
 FAILURES_CSV = config.FEATURES_DIR / "extraction_failures.csv"
 
+# librosa.cqt downsamples the signal for each successive octave, so on very short
+# clips the lowest octave is left with fewer samples than its FFT window and librosa
+# zero-pads, warning each time. Benign here: it perturbs only the lowest CQT bins
+# (~32-65Hz), far below the high-frequency band the replay fingerprint occupies, and
+# the output is still a valid CQT. But 2021 contains clips down to 0.63s (39 frames,
+# tiled ~10x at T=400) and roughly 0.6% of the corpus is under 1s, so this fires
+# thousands of times -- each with a DIFFERENT signal length in the message, which
+# defeats Python's once-per-location dedup and buries the progress bar of a 6-hour
+# run. Filtered narrowly by message rather than blanket-suppressing UserWarning.
+#
+# Nothing is hidden by this: every file's duration_s and n_frames are recorded in the
+# Phase 7 score shards, so exactly which files were affected stays measurable after
+# the fact.
+warnings.filterwarnings("ignore", message=r"n_fft=\d+ is too large for input signal",
+                        category=UserWarning)
+
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 CHUNK_SIZE = 5000
 MFCC_COLS = [f"mfcc_{i}" for i in range(120)]
 
 
-def load_audio(path: str) -> np.ndarray:
+def load_audio_ffmpeg(path: str) -> np.ndarray:
+    """Decode by spawning ffmpeg. Universal -- handles every file in both corpora --
+    but costs ~20.9 ms/file at 8 processes, of which ~20.2 ms is the SPAWN itself
+    (measured with `ffmpeg -version`, i.e. no input file at all). Process creation is
+    a system-wide serialisation point here (kernel + Defender scanning the binary on
+    each launch), so it barely parallelises: 8 workers buy only 2.0x over 1. That
+    caps decode near ~48 files/s no matter how many cores are thrown at it."""
     cmd = [
         FFMPEG_EXE, "-v", "quiet", "-i", path,
         "-f", "f32le", "-ac", "1", "-ar", str(config.SAMPLE_RATE), "-",
@@ -59,6 +83,39 @@ def load_audio(path: str) -> np.ndarray:
     if len(y) == 0:
         raise RuntimeError("ffmpeg produced zero samples")
     return y
+
+
+def load_audio(path: str, prefer_soundfile: bool = True) -> np.ndarray:
+    """Decode to mono float32 at config.SAMPLE_RATE.
+
+    Tries soundfile first (in-process, no spawn), falling back to ffmpeg for anything
+    it cannot read. This is NOT a change of numerical behaviour, and that was verified
+    rather than assumed: on 120 files where both decoders succeed the outputs are
+    **bit-identical, max absolute difference exactly 0.0**. FLAC is lossless, so any
+    correct decoder must agree -- which is why the fallback is free of the numerical
+    inconsistency that Phase 4's "one uniform decode path" rule existed to prevent.
+    Re-running Phase 4 through this function would reproduce its cache exactly.
+
+    Why the change: Phase 4 measured soundfile failing on ~46% of the **2019** corpus
+    ("flac decoder lost sync", a libsndfile decoder limitation) and switched
+    everything to ffmpeg. That figure was never re-tested on 2021 -- where soundfile
+    reads **500/500** sampled files. Since ffmpeg's cost is almost entirely process
+    spawn, avoiding it where possible is the single biggest lever on Phase 7 runtime.
+
+    Any file soundfile cannot read, or delivers at an unexpected sample rate, falls
+    through to ffmpeg, which also handles resampling. So correctness never depends on
+    soundfile's coverage -- only speed does.
+    """
+    if prefer_soundfile:
+        try:
+            y, sr = soundfile.read(path, dtype="float32", always_2d=False)
+            if y.ndim > 1:                      # mixdown, matching ffmpeg's -ac 1
+                y = y.mean(axis=1, dtype=np.float32)
+            if sr == config.SAMPLE_RATE and len(y):
+                return np.ascontiguousarray(y, dtype=np.float32)
+        except Exception:                       # noqa: BLE001 -- any failure -> ffmpeg
+            pass
+    return load_audio_ffmpeg(path)
 
 
 def extract_mfcc_vector(y: np.ndarray) -> np.ndarray:

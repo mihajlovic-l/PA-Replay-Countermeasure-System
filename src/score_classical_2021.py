@@ -40,11 +40,29 @@ MODELS = {
 }
 
 
+def _quieten(estimator) -> None:
+    """Clear `verbose` on a fitted estimator and any pipeline steps inside it.
+
+    sklearn stores `verbose` in the pickle, so a value set at FIT time in Phase 5
+    keeps firing at PREDICT time here. With 236 shards x 300 trees the Random Forest
+    emitted a joblib banner per shard, burying the progress bar in thousands of
+    lines. Cosmetic only -- the scores were unaffected -- but it makes a long run
+    impossible to watch and would bloat any redirected log.
+    """
+    for obj in [estimator] + [s for _, s in getattr(estimator, "steps", [])]:
+        if hasattr(obj, "verbose"):
+            try:
+                obj.verbose = 0
+            except Exception:      # noqa: BLE001 -- read-only property on some estimators
+                pass
+
+
 def load_model(tag: str):
     path, kind = MODELS[tag]
     if not path.exists():
         raise FileNotFoundError(f"missing Phase 5 model for {tag}: {path}")
     model = joblib.load(path)
+    _quieten(model)
     if kind == "proba":
         # 483MB, 300 trees. n_jobs is baked into the pickle; reset it so scoring
         # uses the cores this machine actually has free.

@@ -1,0 +1,5 @@
+prediction,system,control,eer_system,eer_control,delta_pp,claim,supported
+1: shorter T transfers better (less 2019->2021 padding mismatch),baseline_T250,T400,0.3581564071126203,0.3803093790161294,-2.2152971903509067,T=250 beats T=400 on 2021 despite losing on dev,True
+2a: mild waveform augmentation helps out of domain,flatten_T400_aug1,flatten_T400,0.34006173556998975,0.39746680453656935,-5.74050689665796,aug1 beats clean on 2021,True
+2b: aggressive waveform augmentation helps out of domain,flatten_T400_aug,flatten_T400,0.32664771435053547,0.39746680453656935,-7.081909018603389,aug3 beats clean on 2021,True
+3: CMVN transfers better despite worse in-domain,cmvn_T400,T400,0.43467577170158017,0.3803093790161294,5.436639268545079,CMVN beats matched non-CMVN control on 2021,False

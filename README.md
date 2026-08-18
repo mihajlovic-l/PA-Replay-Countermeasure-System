@@ -13,23 +13,55 @@ been done so far (with numbers, decisions, and bugs found/fixed) lives in
 
 ## Status
 
-**Phases 0–6 complete** (environment setup, manifest building, speaker-disjoint
-resplitting, EDA, DSP feature extraction, classical MFCC baseline, CQT-LCNN main
-system). **Phase 7 is built and validated but has not been run** — the held-out 2021
-set is still unscored.
+**Phases 0–7 complete.** The held-out ASVspoof2021 PA eval set has been scored once,
+against nine systems pre-registered before it was touched, plus the four official
+challenge baselines — 943,110 files, zero extraction failures.
 
-| system | dev EER | ROC-AUC |
+### Headline result — 2021 PA eval (721,332 trials)
+
+| system | 2021 EER | dev EER |
 |---|---|---|
-| MFCC-SVM (Phase 5 baseline) | 9.216% | 0.9684 |
-| **CQT-LCNN (Phase 6 main system)** | **0.798%** | **0.9996** |
+| **CQT-LCNN + waveform aug** (`flatten_T400_aug`) | **32.665%** | 2.353% |
+| CQT-LCNN, T=150 | 34.420% | 6.584% |
+| CQCC-GMM *(best official baseline)* | 38.068% | — |
+| LFCC-GMM *(official)* | 39.540% | — |
+| CQT-LCNN, best on dev (`flatten_T400`) | 39.747% | 0.798% |
+| LFCC-LCNN *(official)* | 44.768% | — |
+| RawNet2 *(official)* | 48.605% | — |
+| MFCC-SVM *(this project's classical baseline)* | 49.635% | 9.216% |
 
-An **11.6x reduction** — the thesis's central claim, that constant-Q features retain
-the replay fingerprint that mel-scaled features discard. These are *tuning* numbers on
-the speaker-disjoint 2019 dev split, not generalisation estimates: the 2021 PA eval set
-remains untouched until Phase 7, where **nine pre-registered systems** are scored in a
-single pass against three predictions written down in advance (`PROJECT_PLAN.md`
-phase 7). Dev has absorbed heavy selection pressure across Phases 5 and 6; 2021 will be
-the only clean number.
+Two things are true at once, and both belong in the abstract:
+
+- **Our best system beats all four official baselines** — 5.40 pp / 14.2% relative over
+  CQCC-GMM. Five of our seven CQT-LCNNs beat every official baseline. Against
+  **LFCC-LCNN**, which shares our backbone and differs mainly in front-end, the margin
+  is **12.10 pp / 27% relative** — the cleanest available test of the thesis's claim
+  that constant-Q features retain a replay fingerprint mel-scaled features discard.
+- **Everything degrades enormously on real replay.** The best in-domain model went from
+  0.798% dev EER to 39.747%. At 32.7% EER the best system is not deployable. The 2021 PA
+  task defeats the entire published baseline set; ours is defeated less.
+
+### What the held-out set changed
+
+Evaluating out of domain **reversed the project's conclusions**, which is the main
+methodological finding:
+
+- The **best model on dev is the second worst on 2021**.
+- **Waveform augmentation looked monotonically harmful in-domain** (0.798 → 1.486 →
+  2.353%) and is the single most valuable technique out of domain (39.747 → 34.006 →
+  32.665%). A dev-only thesis would have discarded it.
+- **Three of four pre-registered predictions were supported**, one cleanly refuted
+  (CMVN transfers *worse*, not better).
+- Only **~20% of the classical baseline's collapse is mechanical** (clip-length pooling
+  noise, measured by a control built before the results were known); the rest is genuine
+  simulated→real domain shift.
+
+Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.18; options for what
+to do next in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.
+
+**2021 eval is now spent.** It is a clean generalisation estimate precisely because
+nothing was tuned on it; future work develops against the `progress` partition instead
+(`PROJECT_PLAN.md` §9.0).
 
 ## Repo layout
 
@@ -54,8 +86,11 @@ src/
                             controls, verdicts on the registered predictions
 EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
 explanations/   -- teaching figures (e.g. how ROC-AUC relates to pairwise ranking)
-results/        -- grouped per phase (phase5/{svm,rf}/, phase6/<run>/); summaries,
-                   tables and figures tracked, bulky per-file score dumps gitignored
+results/        -- grouped per phase (phase5/{svm,rf}/, phase6/<run>/, phase7/);
+                   summaries, tables and figures tracked, bulky per-file score dumps
+                   gitignored. phase7/ holds the final EER table, DET curves, condition
+                   breakdown, both controls and the verdicts on the registered
+                   predictions
 PROJECT_PLAN.md     -- full thesis plan, reasoning, and dataset breakdown
 PROGRESS_REPORT.md  -- detailed log of work completed so far
 

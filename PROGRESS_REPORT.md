@@ -913,14 +913,20 @@ nested Phase 6 files.
 
 ---
 
-## Phase 7 — Evaluation on held-out 2021 PA (BUILT AND VALIDATED; RUN NOT YET EXECUTED)
+## Phase 7 — Evaluation on held-out 2021 PA (COMPLETE)
 
-**Status, stated plainly: the held-out set has not been scored.** Three modules were
-written, the shared windowing code was refactored and proven behaviour-preserving,
-the whole pipeline was validated end to end, and the costs were measured. No 2021
-number exists yet beyond a 600-file pipeline smoke test (disclosed in
-`PROJECT_PLAN.md` phase 7). This section records the build; the results section will
-be written after the run.
+**The held-out set was scored once, as pre-registered.** 943,110 files, nine of our
+systems plus the four official ASVspoof baselines, zero extraction failures.
+
+**Headline: `flatten_T400_aug` reaches 32.665% EER on 2021 PA eval, beating all four
+official baselines (best of which is CQCC-GMM at 38.068%) by 5.40 pp / 14.2%
+relative. Five of our seven CQT-LCNNs beat every official baseline.** Every system
+also degraded enormously from dev — the pre-registered primary `flatten_T400` went
+from 0.798% to 39.747%, a 50x collapse. Both facts are the result: the 2021 PA task
+defeats the entire published baseline set, and our systems are defeated less.
+
+Sections 7.0–7.9 record the build, the engineering, and three separate machine
+limits hit along the way. **Results begin at 7.10.**
 
 ### 7.0 A gap in the pre-registration, found before the run
 
@@ -1023,6 +1029,81 @@ Two things were changed as a result, and the second matters more than the first:
   fix and that must not be quietly tolerated. `--accept-failures` is the explicit
   escape hatch once a failure is understood.
 
+### 7.4b The interleaved design failed on memory, and was split in two
+
+The first real run died at chunk 2: **89/8,000 files (1.1%)**, tripping the guard from
+7.4. All of them were memory exhaustion — 83 × `WinError 1455`, plus ffmpeg exiting
+with `0xC000012D` (`STATUS_COMMITMENT_LIMIT`) and `0xC0000142`
+(`STATUS_DLL_INIT_FAILED`) — and throughput had fallen to 28 files/s as the machine
+paged.
+
+The interleaved design asks a 5.9 GB machine for a parent holding **torch + a CUDA
+context + 7 models (~2 GB)** at the same moment as **8 worker interpreters holding
+librosa/numba (~250 MB each)**. Phase 4 ran 8 workers safely for exactly the reason
+this could not: its parent had no torch in it at all.
+
+Rationing the workers did fix the failures — `--n-jobs 6 --no-prefetch` gave 0
+failures — but at **18 files/s**, a 14.6 h run. So the contention was removed instead
+of rationed, by splitting into two stages that never coexist:
+
+- **`--stage extract`** imports no torch whatsoever (verified: `'torch' in sys.modules`
+  is `False` after importing the module — the torch, `datasets` and `models_lcnn`
+  imports are all function-local, since `datasets` pulls torch in transitively). Light
+  parent, 8 workers, i.e. Phase 4's proven configuration.
+- **`--stage score`** runs no extraction workers and reads CQT back from the cache.
+
+The corpus is still decoded exactly once. This is only possible *because* the CQT is
+cached — a decision justified independently as insurance in 7.6, which has now paid
+for itself twice.
+
+### 7.4c ffmpeg was the bottleneck, and Phase 4's decode rule was over-general
+
+With the memory problem solved, extraction still ran at only **20 files/s** — a mere
+**1.1x** over single-threaded, when 6 physical cores should give ~6x. Cores were idle,
+so the work was latency-bound, not compute-bound. Measured on 300 cold files each:
+
+| | 1 worker | 8 workers | speedup |
+|---|---|---|---|
+| raw disk read (no decode) | 10.5 ms | **2.0 ms** | 5.3x — scales fine |
+| **ffmpeg bare spawn** (`-version`, no input file) | **20.2 ms** | — | — |
+| full decode | 41.7 ms | **20.9 ms** | 2.0x — stalls |
+
+Decode at 8 workers costs 20.9 ms/file and launching ffmpeg *with no input at all*
+costs 20.2 ms. **Decode was essentially 100% process-spawn overhead**, and spawn is a
+system-wide serialisation point (kernel plus Defender scanning the binary on every
+launch), so it barely parallelises. That capped decode near ~48 files/s regardless of
+core count — which is why 8 → 12 → 16 workers never helped, and why disk was never
+the issue at ~1 MB/s effective.
+
+**The fix came from re-testing a Phase 4 assumption.** Phase 4 measured soundfile
+failing on ~46% of the corpus and switched everything to ffmpeg for one uniform decode
+path. That 46% was measured on **2019** and never re-tested on 2021 — where soundfile
+reads **500/500** sampled files. `load_audio` now tries soundfile first and falls back
+to ffmpeg for anything it cannot read, so correctness never depends on soundfile's
+coverage; only speed does.
+
+**This is not a change in numerical behaviour, and that was verified rather than
+argued.** FLAC is lossless, so any correct decoder must agree — and it does:
+
+- 2021, both decoders succeed: **120/120 bit-identical, max abs diff exactly 0.0**
+- 2019 sample of 150 (soundfile succeeds on 51%, the rest exercising the fallback):
+  **150/150 bit-identical**, and the recomputed CQT matches **Phase 4's existing
+  on-disk cache byte-for-byte, 150/150**
+
+So Phase 4's cache remains exactly reproducible through the new function, and the
+"one uniform decode path" rule is *satisfied in the sense that mattered* — it existed
+to prevent numerical inconsistency between decoders, and there is provably none. The
+honest restatement for the thesis is that the two decoders are interchangeable on this
+data, verified, and the choice is now made on speed alone.
+
+Result: extraction **20 → 64.5 files/s, a 3.2x speedup**, taking it from 12.3 h to
+~4.1 h.
+
+The general lesson, which is the same one Phase 5's dropped-features error taught:
+a measurement made once, on one corpus, under one set of conditions, silently becomes
+an assumption everywhere else. The 46% figure was correct and load-bearing when it was
+made; it was simply never re-checked against the data it was later applied to.
+
 ### 7.5 Costs, measured — including one estimate that was wrong twice
 
 - **A benchmarking artifact, caught.** A first pass measured 175.5 ms/file and put
@@ -1030,19 +1111,26 @@ Two things were changed as a result, and the second matters more than the first:
   than 2019's longer ones, an obvious contradiction. It was librosa's lazy filterbank
   construction on first call. Warm: **decode 28.7 ms + MFCC 3.6 ms + CQT 23.2 ms =
   55.5 ms/file**.
-- **The parallel projection was still wrong.** Scaling 55.5 ms across 8 workers
-  predicted ~2.5 h; **measured steady state is 44 files/s** (91 s per 4,000-file
-  chunk), i.e. effective parallelism of only **2.4x**, giving **~6.2 h** for all
-  943,110 files. Two candidate fixes were tested rather than assumed: pinning BLAS/FFT
-  to one thread per worker gained 11% (36 → 40 files/s, now applied automatically),
-  and **12 workers measured no faster than 8** (39 vs 40 files/s), so the machine is
-  saturated at 8. The residual bottleneck is per-file ffmpeg process-spawn latency,
-  which on Windows includes Defender inspecting each launch.
-- GPU forward is not the constraint: 5.74 ms/sample for all 7 LCNNs (0.95 at T=400,
-  0.59 at T=250), ~1.5 h, overlapped with extraction by a one-chunk prefetch thread.
-- Classical pass: SVM ~3.56 ms/file, RF 0.40 ms/file → ~1.1 h.
+- **An early 44 files/s reading was page-cache-warm** and should not have been
+  trusted: it came from repeatedly re-running `--limit 12000` over the *same* first
+  12,000 files, so the OS had them cached. The honest cold-disk figure for the
+  interleaved design was ~20-28 files/s. Worth recording as a benchmarking trap —
+  re-running a benchmark over an identical file set measures the page cache, not the
+  workload.
+- Pinning BLAS/FFT to one thread per worker gained 11% (36 → 40 files/s, applied
+  automatically), and 12 workers measured no faster than 8. Neither mattered next to
+  the decode fix in 7.4c.
 
-**Total ~7.3 h**, against the ~4.7 h originally sketched in `PROJECT_PLAN.md`.
+**Final measured throughput, after the two-stage split and the decoder change:**
+
+| stage | rate | full 943,110 |
+|---|---|---|
+| extract (8 workers, no torch in process) | 64.5 files/s | ~4.1 h |
+| score (GPU, reading the CQT cache) | 133 files/s | ~1.9 h |
+| classical SVM + RF (from cached MFCC) | — | ~1.0 h |
+
+**Total ~7 h**, against ~4.7 h originally sketched — but arrived at by measurement,
+with the two designs that would have taken 13.8 h and 14.6 h eliminated on evidence.
 
 ### 7.6 The 27GB caching decision was based on a wrong number
 
@@ -1124,6 +1212,230 @@ pipeline.
 
 ---
 
-Next: **run** Phase 7 (`src.evaluate_2021` → `src.score_classical_2021` →
-`src.report_2021`, ~7.3 h total, resumable), then write up the results against the
-nine pre-registered systems and the three registered predictions.
+### 7.10 The run itself
+
+Completed clean, at the throughputs measured in 7.5:
+
+| check | result |
+|---|---|
+| shards (index / blob / mfcc / scores) | 236 / 236 / 236 / 236 |
+| files scored | **943,110 / 943,110 (100.000%)** |
+| extraction failures | **0** |
+| missing vs manifest / duplicate filenames | 0 / 0 |
+| CQT cache vs fresh extraction | **300/300 byte-identical** |
+| stored scores vs fresh re-extract + re-score | **PASS**, worst 2.7e-5 |
+| NaN / inf across all 9 systems | 0 / 0 |
+| classical scores, fresh re-score of 200 files | **PASS**, worst 5.0e-8 |
+| disk | 12 GB CQT + 616 MB MFCC + 36 MB scores = **12.7 GB** (predicted 12.7) |
+
+Zero failures across 943,110 files validates the decode path at ~4x the scale Phase 4
+established it at. The end-to-end check is the one that matters most: it re-decoded 60
+files from source, re-extracted their CQT, re-ran all seven models and compared against
+what was stored — agreement to 2.7e-5 (float32 cuDNN nondeterminism) means the cache,
+the offsets, the windowing and the model loading are sound *as a chain*, not merely
+individually.
+
+One cosmetic issue: sklearn stores `verbose` in the pickle at fit time and re-fires it
+at predict time, so the Random Forest emitted a joblib banner per shard and buried the
+progress bar in thousands of lines. Scores unaffected; `_quieten()` now clears it.
+
+### 7.11 Results — 2021 PA eval (`partition=="eval"`, 721,332 trials)
+
+94,068 bonafide / 627,264 spoof. Every number below is produced by `metrics.py`, the
+same module Phases 5 and 6 used, over the same trials, for our systems and the official
+baselines alike.
+
+| system | 2021 EER | dev EER | ROC-AUC |
+|---|---|---|---|
+| **`flatten_T400_aug`** (3 aug copies) | **32.665%** | 2.353% | 0.7398 |
+| `flatten_T400_aug1` (1 aug copy) | 34.006% | 1.486% | 0.7221 |
+| `T150` | 34.420% | 6.584% | 0.7078 |
+| `baseline_T250` | 35.816% | 2.780% | 0.6918 |
+| `T400` | 38.031% | 0.902% | 0.6642 |
+| CQCC-GMM *(official)* | 38.068% | — | 0.6684 |
+| LFCC-GMM *(official)* | 39.540% | — | 0.6475 |
+| `flatten_T400` **(pre-registered primary)** | 39.747% | 0.798% | 0.6383 |
+| `cmvn_T400` | 43.468% | 1.293% | 0.5855 |
+| LFCC-LCNN *(official)* | 44.768% | — | 0.5735 |
+| MFCC-RF | 45.833% | 11.736% | 0.5586 |
+| RawNet2 *(official)* | 48.605% | — | 0.5188 |
+| MFCC-SVM | 49.635% | 9.216% | 0.5066 |
+
+**Five of seven CQT-LCNNs beat all four official baselines.** Best-vs-best is 5.40 pp
+(14.2% relative) over CQCC-GMM.
+
+MFCC-SVM at ROC-AUC 0.5066 is statistically indistinguishable from a coin flip: the
+classical baseline retains **no usable signal** on real replay. Note also that the
+classical ordering *inverted* — RF (45.833%) now beats SVM (49.635%), reversing dev.
+
+Supplementary metrics (precision/recall/F1 at the EER threshold) are in
+`results/phase7/eer_table_2021.csv` but are dominated by the 6.67:1 imbalance —
+precision_bonafide is ~0.24 even for the best system — so **EER is the number to
+report and the rest is context**.
+
+### 7.12 The measurement chain validates against published results
+
+The four official baselines were scored by *our* code from *their* published score
+files on the same trials. They come out at 38.068 / 39.540 / 44.768 / 48.605% —
+in the range documented for the ASVspoof 2021 PA baselines, **and in the correct
+order** (CQCC-GMM best, RawNet2 worst), which is a distinctive fingerprint of that
+challenge's PA track.
+
+That independently confirms the label join, the partition filter, the score
+orientation and the EER implementation all at once. **Action before the write-up:
+check the exact figures against the ASVspoof 2021 evaluation paper.** If they match,
+this converts the results chapter from "trust our numbers" into "our pipeline
+reproduces the published baselines", which is the strongest methodological statement
+available.
+
+### 7.13 The registered predictions: 3 of 4 supported
+
+Written down in `PROJECT_PLAN.md` before 2021 was touched, each against a control
+differing in exactly one variable.
+
+| prediction | system vs matched control | outcome |
+|---|---|---|
+| **1.** shorter T transfers better | `baseline_T250` 35.816 vs `T400` 38.031 | **supported, −2.22 pp** |
+| **2a.** mild augmentation helps | `aug1` 34.006 vs `flatten_T400` 39.747 | **supported, −5.74 pp** |
+| **2b.** aggressive augmentation helps | `aug3` 32.665 vs `flatten_T400` 39.747 | **supported, −7.08 pp** |
+| **3.** CMVN transfers better | `cmvn_T400` 43.468 vs `T400` 38.031 | **refuted, +5.44 pp worse** |
+
+**Prediction 2 is the most valuable finding in the project, and it inverted exactly.**
+On dev, augmentation was monotonically harmful (0.798 → 1.486 → 2.353). On 2021 the
+ordering flips precisely (39.747 → 34.006 → 32.665). Section 6.9 argued this was
+*structurally* untestable in-domain, because dev is also simulated 2019 data and a
+model exploiting simulator regularities therefore looks **better** on dev. That
+argument is now confirmed by measurement rather than asserted. **Optimising on dev
+would have discarded the single most effective technique in the project.**
+
+**Prediction 1 holds, and the trend continues past where it was registered.** On 2021:
+T150 34.420 < T250 35.816 < T400 38.031 — a clean monotonic inversion of the dev
+ordering (6.584 / 2.780 / 0.902). Adding `T400` (timepool) to the registration is what
+made this testable; against `flatten_T400` the comparison would have confounded T with
+head. That amendment (7.0) earned its place.
+
+**Prediction 3 is cleanly refuted.** CMVN hurt in-domain *and* out-of-domain, so 6.8's
+conclusion — that it destroys the per-band spectral level carrying the replay
+fingerprint — holds on real replay too. A negative result, and a clean one.
+
+**The dev→2021 rank inversion is suggestive, not established**: Spearman ρ = **−0.607,
+p = 0.148** across the 7 LCNNs. Striking and mechanistically explicable, but **n=7 and
+it is not significant** — it must be reported as a described pattern with its p-value,
+never as a proven law.
+
+### 7.14 The thesis's central claim, on real physical replay
+
+| comparison | margin |
+|---|---|
+| CQT-LCNN 32.665% vs **MFCC-SVM 49.635%** | 16.97 pp / 34% relative |
+| CQT-LCNN 32.665% vs **LFCC-LCNN (official) 44.768%** | 12.10 pp / 27% relative |
+| non-augmented `flatten_T400` 39.747% vs LFCC-LCNN | 5.02 pp / 11% relative |
+
+The second row is the cleanest test the challenge affords: **same backbone family,
+different front-end**, which is exactly the axis 6.3 chose the LCNN backbone to
+isolate. The third row matters because it shows the front-end advantage does not
+depend on the augmentation win.
+
+**Caveat to state**: our models trained on the enriched 175,959-file speaker-disjoint
+resplit while the official baselines used standard 2019 PA train (54,000 files). The
+comparison therefore isolates front-end *plus* a training-data difference. Real, but
+not perfectly controlled.
+
+### 7.15 Condition breakdown — the replay device dominates
+
+EER spread across levels of each factor (`results/phase7/condition_breakdown.csv`):
+
+| factor | convention | spread | worst → best |
+|---|---|---|---|
+| **`r`** (replay config) | pooled-bonafide | **24.50 pp** | r3 52.45% → r5 27.95% |
+| **`s`** | pooled-bonafide | **15.92 pp** | s4 47.62% → s3 31.70% |
+| `room` | within-group | 10.54 pp | R2 41.66% → R6 31.12% |
+| `m` | pooled-bonafide | 7.19 pp | m1 42.55% → m3 35.36% |
+| `mic` | within-group | 5.34 pp | M3 42.27% → M2 36.93% |
+| `c` | pooled-bonafide | 4.77 pp | c4 42.07% → c3 37.30% |
+| `dist` | pooled-bonafide | 3.88 pp | d1 41.37% → d4 37.49% |
+
+**The replay-side factors dominate and the room barely matters** — a 24.5 pp spread
+across `r` versus 10.5 pp across `room` and 5.3 pp across the ASV microphone. That is
+physically coherent and directly supports the thesis's premise: what is being detected
+is a *device* fingerprint imposed by the replay chain, not a property of the room.
+
+Condition **`r3` at 52.45% is worse than chance** — that configuration does not merely
+evade the system, it inverts it. `s4` (47.62%) is close behind. Identifying what `r3`
+and `s4` physically are, from the 2021 evaluation plan, would turn "it fails" into "it
+fails on X because Y" for the cost of a document lookup.
+
+### 7.16 Both controls came back clean
+
+**Duration is dead as a cue on 2021**: duration alone scores **50.79% EER**, tiling
+factor **49.06%** — exactly chance. The tile-periodicity confound quantified and
+dismissed on 2019 in 6.10 does not transfer at all, so no model can be exploiting it
+here. Note this is *worse than chance-adjacent* 2019 behaviour (41.5%), and recall the
+class-duration relationship **inverts** between corpora — 2019 bonafide are longer,
+2021 spoof are marginally longer (2.412s vs 2.366s) — so any residual 2019 reliance on
+"longer ⇒ bonafide" is actively harmful out of domain.
+
+**The mechanical component is real but small.** Restricting 2019 dev to 2021-like clip
+lengths (`results/phase7/control_short_clips_2019dev.csv`):
+
+| system | all dev | ≤250f | ≤200f | ≤150f |
+|---|---|---|---|---|
+| MFCC-SVM | 9.216% | 13.139% | 15.120% | **17.020%** |
+| `flatten_T400` | 0.798% | 0.974% | 1.148% | **1.709%** |
+
+Of MFCC-SVM's 40.4 pp total collapse, only ~7.8 pp is attributable to clip length. So
+**roughly 80% of the degradation is genuine simulated→real domain shift**, not
+measurement artifact. That is the number the discussion chapter needs, and it is
+available *because* the control was built before the results were known.
+
+### 7.17 The `hidden` partition splits the systems in two
+
+Extracted in the same pass as a free consistency check, never used for selection
+(`results/phase7/eer_other_partitions.csv`):
+
+| system | progress | eval | hidden |
+|---|---|---|---|
+| `flatten_T400_aug` | 29.795% | 32.665% | **30.934%** |
+| `flatten_T400_aug1` | 32.041% | 34.006% | **30.028%** |
+| `T150` | 31.973% | 34.420% | 48.390% |
+| `baseline_T250` | 32.683% | 35.816% | 50.078% |
+| `T400` | 36.364% | 38.031% | 51.740% |
+| `flatten_T400` | 37.537% | 39.747% | 50.795% |
+| `cmvn_T400` | 42.525% | 43.468% | 53.882% |
+| MFCC-SVM | 49.711% | 49.635% | 52.053% |
+
+`progress` tracks `eval` closely for every system — a clean replication. But on
+**`hidden`, every non-augmented system collapses to chance (48–54%) while the two
+waveform-augmented systems hold at ~30%.** On the hardest subset, augmentation is the
+*only* thing that survives. This is the strongest single piece of evidence for the
+augmentation argument in the whole project and deserves its own investigation.
+
+### 7.18 What this phase established
+
+- **Out-of-domain evaluation was not a formality; it reversed the project's
+  conclusions.** The best dev system is the second *worst* on 2021. The technique that
+  looked monotonically harmful in-domain is the most valuable one out of domain. A
+  thesis that reported only dev numbers would have been confidently wrong about both.
+- **Pre-registration did real work.** Three of four predictions were adjudicated
+  against matched controls, and the fourth was cleanly refuted. Because the list and
+  the predictions were fixed in advance, both outcomes are results rather than
+  rationalisations — and the one amendment (adding `T400`) is documented with its
+  reason and its timing.
+- **The thesis's central claim survives the hardest available test**, with the
+  front-end advantage holding even without the augmentation win.
+- **The honest headline is dual**: our best system beats every official baseline, and
+  it is still at 32.7% EER, which is not a deployable system. Both halves belong in the
+  abstract.
+- **Naive score fusion does not help** (measured on `progress` only, leaving `eval`
+  untouched): mean-z fusion of the three best systems gives 29.668% against 29.795% for
+  the best single system — **~0.13 pp**. Recorded so the time is not spent again.
+
+---
+
+**2021 PA eval has now been spent.** Its numbers are a clean generalisation estimate
+precisely because nothing was tuned on them. Any future work that selects models using
+`eval` retroactively destroys that. The protocol from here is in `PROJECT_PLAN.md`
+section 9: develop against `progress`, keep `eval` for a single final confirmation, and
+report post-hoc work separately from the pre-registered results.
+
+Next: see `PROJECT_PLAN.md` section 9, "Options moving forward" — a menu, not a plan.

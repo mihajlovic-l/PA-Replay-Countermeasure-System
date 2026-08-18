@@ -347,6 +347,14 @@ PHASE7_PREFETCH = True
 # packed blob. Same check pack_features.py runs, for the same reason: a silent
 # offset bug would corrupt every score with nothing surfacing as an error.
 PHASE7_VERIFY_N = 200
+# Rebuild the joblib/loky worker pool every N chunks. loky reuses one pool across
+# every Parallel() call, so over hundreds of chunks those 8 long-lived interpreters
+# accumulate heap fragmentation and OS handles. Measured the hard way: a run died
+# after 117 chunks (468,000 files, 1.5h) with WinError 1450
+# (ERROR_NO_SYSTEM_RESOURCES) raised inside loky's result transport while returning
+# a ~54MB chunk -- not a per-file error, so it escaped the failure guard and killed
+# the run outright. 20 chunks = 80,000 files between rebuilds, a few seconds each.
+PHASE7_RECYCLE_EVERY = 20
 
 for d in (PHASE7_DIR, PHASE7_SCORES_DIR, PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
           PA2021_MFCC_SHARD_DIR, PA2021_SCORE_SHARD_DIR, PA2021_CLASSICAL_SHARD_DIR):

@@ -922,10 +922,138 @@ contents were larger than the earlier partial listing had shown). E: unchanged a
 
 ---
 
-## 8. Immediate next action
+## 8. Immediate next action *(historical — completed in Phase 0)*
 
 Install the remaining libraries into `OG\.venv` — **using `python.exe -m pip install
 ...`, never `pip.exe` directly** (see the gotcha above) — then begin Phase 1
 (manifest-building code): `librosa scikit-learn soundfile gradio faster-whisper
 sounddevice` (streamlit as an alternative to gradio if preferred; torchaudio is already
 present).
+
+---
+
+## 9. Options moving forward (a menu, not a plan)
+
+Phases 0–7 are complete. This section lists what *could* be done next and why, so that
+whatever is actually chosen can be justified against the alternatives that were
+considered and declined. **Nothing here is committed.** When a subset is chosen, record
+which and why — "we did A and C, not B, because …" is a far stronger thesis sentence
+than a list of everything that was possible.
+
+### 9.0 The rule that governs everything below — read first
+
+**2021 PA eval has been spent.** Its numbers are a clean generalisation estimate
+*because* nothing was tuned on them. If new models are now selected by looking at
+`eval`, that status is destroyed retroactively and the headline result stops being
+defensible — this is precisely the failure mode section 5 identifies as the one
+examiners probe for.
+
+Protocol from here:
+
+- **Develop against the `progress` partition** (87,048 trials). Phase 7 showed it
+  tracks `eval` closely for every system (PROGRESS_REPORT 7.17), so it is a good
+  out-of-domain development surrogate.
+- **Touch `eval` once more at most**, for a single final confirmation of whatever is
+  chosen.
+- **Report post-hoc work in a section clearly separated from the pre-registered
+  results.** The Phase 7 table stands as the clean estimate; anything later is
+  exploratory and must be labelled as such.
+
+### 9.1 Push the augmentation axis further — highest expected value
+
+Waveform augmentation was the strongest lever found and **the dose-response has not
+plateaued**: 0 → 1 → 3 copies gives 39.747 → 34.006 → 32.665% EER, still falling. On
+the `hidden` partition the gap is starker still: augmented systems hold ~30% while every
+non-augmented one collapses to 48–54%.
+
+Try 5–7 copies, and/or more aggressive perturbation chains. Cost ~1.3 h per copy to
+generate plus one training run each (~7–11 h). If regenerating the copies anyway, fix
+the latent seed collision noted in 6.10 (multiplier `1_000_000`).
+
+*Why it might not pay*: the curve must flatten eventually, and every copy costs ~4.6 GB
+plus a training run. The in-domain cost also grows monotonically, so dev EER will keep
+looking worse — which by now is expected rather than alarming.
+
+### 9.2 Extend T downward
+
+On 2021 the T-axis is monotonic in the opposite direction to dev: T150 34.420 < T250
+35.816 < T400 38.031. **T=100 and T=75 are untested**, cheap, and train faster than
+anything run so far.
+
+*Why it might not pay*: T=150 already underfits in-domain (6.584% dev EER, and 6.6
+showed it underfits rather than overfits), so there is a floor below which the model
+simply lacks context. The curve may turn over immediately.
+
+### 9.3 Combine 9.1 and 9.2 — the obvious untested cell
+
+**Every model on the augmentation axis was trained at T=400, the *worst* T for
+transfer.** `T150 + 3 augmented copies` has never been run. If the two effects are even
+partially additive, this is the most likely route to a materially better number, and it
+is a single training run.
+
+### 9.4 Verify the official-baseline reproduction — cheapest high-value item
+
+Phase 7 computed the four official baselines at 38.068 / 39.540 / 44.768 / 48.605% EER
+from their published score files, in the documented order. **Check these against the
+ASVspoof 2021 evaluation paper.** If they match, the results chapter can state that the
+pipeline reproduces the published baselines exactly — which upgrades every other number
+in the thesis from "trust us" to "independently anchored". Cost: reading one table.
+
+### 9.5 Identify conditions `r3` and `s4`
+
+`r3` scores 52.45% EER (worse than chance) and `s4` 47.62%, against `r5` at 27.95%.
+Naming what those configurations physically are, from the 2021 evaluation plan, turns
+the condition analysis from "performance varies" into a mechanistic account of what
+defeats the system. Cost: a document lookup.
+
+### 9.6 Statistical rigour
+
+- **Bootstrap confidence intervals on EER.** With 721,332 trials these will be tight and
+  cheap, and they are needed before claiming that e.g. the 2.2 pp T250-vs-T400 gap is
+  real.
+- The dev→2021 rank inversion is Spearman **ρ = −0.607, p = 0.148** over 7 systems —
+  suggestive, not significant. Either report it with the p-value as a described pattern,
+  or add systems to strengthen it.
+- **MFCC-RF has only 236 distinct score values** (300-tree vote granularity), so its DET
+  curve is a coarse step function and its EER sits in a large tie block. Either note the
+  caveat or refit with more trees if RF stays in the headline table.
+
+### 9.7 min t-DCF
+
+EER was the metric chosen here, but **min t-DCF was the 2021 challenge's primary
+metric**, and the official ASV scores are already on disk (`PA-keys-full/keys/PA/ASV/`).
+Computing it would allow direct placement against published challenge rankings rather
+than only against baseline EERs. Moderate work, high citability. Overlaps with the
+Phase 8 ASV extension already sketched.
+
+### 9.8 Score fusion — measured, and it does not pay
+
+Estimated on `progress` only, leaving `eval` untouched: mean-z fusion of the three best
+systems gives **29.668%** against **29.795%** for the best single system — a gain of
+**0.13 pp**. Recorded as a *negative* result so the time is not spent again. A trained
+fusion (logistic regression on `progress`) might do somewhat better, but the naive
+estimate says the headroom is small; the systems' rank correlations (0.375–0.876) are
+apparently not decorrelated enough in the way fusion needs.
+
+### 9.9 Things deliberately *not* in this list
+
+- **Retuning anything against `eval`.** See 9.0.
+- **A different backbone** (ResNet, AASIST). 6.3 chose LCNN specifically so the
+  comparison against the official LFCC-LCNN isolates the front-end; swapping it forfeits
+  the cleanest result in the project.
+- **SSL front-ends (wav2vec2/XLS-R).** Still the right "future work" paragraph, still
+  out of reach on a 4 GB GPU in this timeframe — see section 1.
+
+### 9.10 Where the other directions sit
+
+The extensions already sketched — **Phase 8** (ASV + t-DCF) and **Phase 9** (live demo:
+keyword spotting, self-enrolled speaker verification), and any move beyond physical
+access into logical access / deepfake detection — are orthogonal to everything above.
+They broaden the project; 9.1–9.7 deepen the result that already exists. Both are
+legitimate; doing a little of each badly is not.
+
+One practical note for Phase 9 carried over from Phase 7: **this machine's binding
+constraint is system commit and kernel resources, never VRAM or CPU.** Three separate
+runs died on it (PROGRESS_REPORT 7.4, 7.4b, and the loky pool exhaustion at chunk 117).
+A live demo loading a torch model alongside Whisper and an audio stack will meet the
+same ceiling.
