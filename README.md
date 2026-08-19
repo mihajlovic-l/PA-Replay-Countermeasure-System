@@ -30,6 +30,13 @@ challenge baselines — 943,110 files, zero extraction failures.
 | RawNet2 *(official)* | 48.605% | — |
 | MFCC-SVM *(this project's classical baseline)* | 49.635% | 9.216% |
 
+**The measurement chain is verified against the published record.** Scoring the four
+official baselines with our own code reproduces Liu et al. (IEEE/ACM TASLP 2023,
+doi: 10.1109/TASLP.2023.3285283) Table XV **exactly** — all eight values, evaluation
+and progress partitions, to ≤0.005 pp — plus two further exact matches against its
+Table X on subsets defined by `dist` and `trim_flag`. Every number here is anchored to
+the published challenge results.
+
 Two things are true at once, and both belong in the abstract:
 
 - **Our best system beats all four official baselines** — 5.40 pp / 14.2% relative over
@@ -55,6 +62,17 @@ methodological finding:
 - Only **~20% of the classical baseline's collapse is mechanical** (clip-length pooling
   noise, measured by a control built before the results were known); the rest is genuine
   simulated→real domain shift.
+- On the challenge's **simulated** hidden track, every official baseline and every
+  non-augmented system degrades — while the augmented models *improve*, reaching
+  **26.47% EER**, the best figure this project reaches anywhere on 2021. The challenge
+  organisers observed this effect correlationally across whole systems; here it is a
+  controlled experiment with augmentation as the only variable.
+
+Placed against the challenge itself, the best system would rank **11th of 24** entries
+on EER (best in the PA track was 24.25%), ahead of all four baselines — with two
+caveats that travel with that claim: the challenge ranked by min t-DCF rather than EER,
+and these systems trained on ~3.3× the permitted data, so they are **not
+challenge-compliant**.
 
 Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.18; options for what
 to do next in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.

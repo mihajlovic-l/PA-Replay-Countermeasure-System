@@ -991,20 +991,45 @@ transfer.** `T150 + 3 augmented copies` has never been run. If the two effects a
 partially additive, this is the most likely route to a materially better number, and it
 is a single training run.
 
-### 9.4 Verify the official-baseline reproduction — cheapest high-value item
+### 9.4 ~~Verify the official-baseline reproduction~~ — **DONE, verified exactly**
 
-Phase 7 computed the four official baselines at 38.068 / 39.540 / 44.768 / 48.605% EER
-from their published score files, in the documented order. **Check these against the
-ASVspoof 2021 evaluation paper.** If they match, the results chapter can state that the
-pipeline reproduces the published baselines exactly — which upgrades every other number
-in the thesis from "trust us" to "independently anchored". Cost: reading one table.
+Checked against Liu et al., IEEE/ACM TASLP 2023 (doi: 10.1109/TASLP.2023.3285283),
+Table XV and Table X. **All eight baseline EERs match to ≤0.005 pp**, on both the
+evaluation and progress partitions, plus an exact match on two further subsets defined
+by `dist` and `trim_flag`. See PROGRESS_REPORT 7.12. The results chapter can state
+that the pipeline reproduces the published baselines exactly.
 
-### 9.5 Identify conditions `r3` and `s4`
+Two corrections came out of the same reading, both recorded in PROGRESS_REPORT 7.14:
+**B03 is LFCC-LCNN-LSTM**, not a plain LCNN (so that comparison is front-end-dominant,
+not front-end-only), and **our systems are not challenge-compliant** — participants
+were required to train on the 2019 PA train partition alone (54,000 files) whereas we
+used the 175,959-file enriched resplit including 2019 PA eval. Must be disclosed
+wherever our numbers sit beside challenge numbers.
 
-`r3` scores 52.45% EER (worse than chance) and `s4` 47.62%, against `r5` at 27.95%.
-Naming what those configurations physically are, from the 2021 evaluation plan, turns
-the condition analysis from "performance varies" into a mechanistic account of what
-defeats the system. Cost: a document lookup.
+### 9.5 ~~Identify conditions `r3` and `s4`~~ — **DONE, and they reproduce the paper**
+
+Table III and supplementary Table IX decode every factor. Five of six of our condition
+findings independently reproduce the paper's published ones, using a different metric
+and a different system; the sixth (attacker-to-ASV distance) conflicts and is reported
+as such. Two findings the paper does not report were added: attacker-room identity
+matters enormously (24.50 pp spread) even though room *size* does not, and the
+room-triples the paper defines in its footnote 7 split cleanly into group means of
+46.7 / 31.8 / 39.7% EER. Full detail in PROGRESS_REPORT 7.15.
+
+### 9.5b Follow-ups created by the paper analysis (new)
+
+- **Train on VAD-trimmed audio.** PROGRESS_REPORT 7.19 shows our non-augmented models
+  lose 11.5–16.7 pp when non-speech is removed, versus 0.3–6.9 pp for the official
+  baselines — they lean on non-speech much harder than the published systems do, which
+  the paper (§VI) explicitly flags as an undesirable database cue. Training on trimmed
+  audio would test whether the dependence can be removed without costing in-domain
+  accuracy. Directly addresses a stated limitation of the field.
+- **Investigate the attacker-room grouping.** Why is room group 2 (`r4,r5,r6`) ~15 pp
+  easier than group 1? Nothing in the published analysis explains it, because rooms
+  were excluded there after a size correlation came back null.
+- **Resolve the attacker-to-ASV distance conflict.** Recompute that breakdown with
+  distance-matched bonafide instead of the pooled convention, to test whether our
+  pooling leaks a level cue.
 
 ### 9.6 Statistical rigour
 
@@ -1018,13 +1043,19 @@ defeats the system. Cost: a document lookup.
   curve is a coarse step function and its EER sits in a large tie block. Either note the
   caveat or refit with more trees if RF stays in the headline table.
 
-### 9.7 min t-DCF
+### 9.7 min t-DCF — promoted after the paper analysis
 
 EER was the metric chosen here, but **min t-DCF was the 2021 challenge's primary
 metric**, and the official ASV scores are already on disk (`PA-keys-full/keys/PA/ASV/`).
-Computing it would allow direct placement against published challenge rankings rather
-than only against baseline EERs. Moderate work, high citability. Overlaps with the
-Phase 8 ASV extension already sketched.
+
+This moved *up* the list once the paper was read. The full ranked results are in its
+Table XV, so computing t-DCF would place our systems directly on the challenge's own
+primary axis rather than on a secondary one — turning "11th of 24 **on EER**"
+(PROGRESS_REPORT 7.20) into a directly comparable figure. There is also more room to
+show separation than the EER numbers suggest: every PA baseline sits at min t-DCF
+**0.943–1.000**, effectively saturated against an ASV floor of 0.12, so the metric
+discriminates in a region where EER is compressed. Moderate work, high citability,
+and it overlaps with the Phase 8 ASV extension already sketched.
 
 ### 9.8 Score fusion — measured, and it does not pay
 

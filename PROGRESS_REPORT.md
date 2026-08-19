@@ -1273,20 +1273,40 @@ Supplementary metrics (precision/recall/F1 at the EER threshold) are in
 precision_bonafide is ~0.24 even for the best system — so **EER is the number to
 report and the rest is context**.
 
-### 7.12 The measurement chain validates against published results
+### 7.12 The measurement chain is VERIFIED against the published record
 
-The four official baselines were scored by *our* code from *their* published score
-files on the same trials. They come out at 38.068 / 39.540 / 44.768 / 48.605% —
-in the range documented for the ASVspoof 2021 PA baselines, **and in the correct
-order** (CQCC-GMM best, RawNet2 worst), which is a distinctive fingerprint of that
-challenge's PA track.
+Checked against Liu et al., *"ASVspoof 2021: Towards Spoofed and Deepfake Speech
+Detection in the Wild"*, IEEE/ACM TASLP (doi: 10.1109/TASLP.2023.3285283) —
+**Table XV**, the full PA progress/evaluation results.
 
-That independently confirms the label join, the partition filter, the score
-orientation and the EER implementation all at once. **Action before the write-up:
-check the exact figures against the ASVspoof 2021 evaluation paper.** If they match,
-this converts the results chapter from "trust our numbers" into "our pipeline
-reproduces the published baselines", which is the strongest methodological statement
-available.
+The four official baselines were scored by *our* code, from *their* published score
+files, on the trials *we* selected:
+
+| baseline | ours (eval) | paper | ours (progress) | paper |
+|---|---|---|---|---|
+| B01 CQCC-GMM | 38.068 | **38.07** | 36.331 | **36.33** |
+| B02 LFCC-GMM | 39.540 | **39.54** | 39.788 | **39.79** |
+| B03 LFCC-LCNN | 44.768 | **44.77** | 42.163 | **42.16** |
+| B04 RawNet2 | 48.605 | **48.60** | 46.026 | **46.03** |
+
+**All eight agree to ≤0.005 pp** — pure rounding to the paper's two decimals.
+
+A third, independent confirmation fell out of the hidden-track analysis (7.19),
+on differently-defined subsets and against a different table (**Table X**):
+
+| subset | ours | paper Table X (PA) |
+|---|---|---|
+| eval restricted to D4/d4, "with non-speech" | 30.02 / 32.16 / 49.02 / 43.95 | **30.02 / 32.16 / 49.02 / 43.95** |
+| `trim` subset, "w/o any non-speech" | 36.65 / 39.09 / 51.65 / 44.26 | **36.65 / 39.09 / 51.65 / 44.26** |
+
+(B01 / B02 / B03 / B04 in each cell.) Exact on all eight.
+
+Three independent checks, across three differently-constructed trial subsets,
+jointly confirm the label join, the `partition` filter, the `trim_flag` and `dist`
+semantics, the score orientation, and the EER implementation. **The results chapter
+can therefore state that this pipeline reproduces the published ASVspoof 2021 PA
+baselines exactly** — which anchors every other number in the thesis, including the
+ones no one else has computed.
 
 ### 7.13 The registered predictions: 3 of 4 supported
 
@@ -1331,39 +1351,95 @@ never as a proven law.
 | CQT-LCNN 32.665% vs **LFCC-LCNN (official) 44.768%** | 12.10 pp / 27% relative |
 | non-augmented `flatten_T400` 39.747% vs LFCC-LCNN | 5.02 pp / 11% relative |
 
-The second row is the cleanest test the challenge affords: **same backbone family,
-different front-end**, which is exactly the axis 6.3 chose the LCNN backbone to
-isolate. The third row matters because it shows the front-end advantage does not
-depend on the augmentation win.
+The second row is the closest test the challenge affords to the axis 6.3 chose the
+LCNN backbone to isolate. The third row matters because it shows the front-end
+advantage does not depend on the augmentation win.
 
-**Caveat to state**: our models trained on the enriched 175,959-file speaker-disjoint
-resplit while the official baselines used standard 2019 PA train (54,000 files). The
-comparison therefore isolates front-end *plus* a training-data difference. Real, but
-not perfectly controlled.
+**CORRECTION forced by the paper — B03 is not a plain LCNN.** Table V states B03 is
+**LFCC + LCNN-LSTM**. The published score directory is named `LFCC-LCNN`, which is
+what misled an earlier draft of this section into claiming the comparison shares our
+backbone exactly. It does not: their baseline adds a recurrent stage ours has no
+equivalent of. The honest statement is **"same LCNN family, but their baseline adds
+an LSTM, so the comparison is front-end-*dominant*, not front-end-*only*"**. The
+12.10 pp margin is unaffected; only its interpretation narrows.
 
-### 7.15 Condition breakdown — the replay device dominates
+**DISCLOSURE that must appear wherever our numbers sit beside challenge numbers.**
+The paper (§II, p.2) states participants were *required* to train PA systems on the
+**ASVspoof 2019 PA training partition** alone — 54,000 files — and for LA it says
+use of the 2019 *evaluation* subset was "strictly forbidden". Our models were trained
+on the Phase 2 enriched speaker-disjoint resplit: **175,959 files (~3.3x), and that
+pool deliberately includes the entire 2019 PA eval partition** (see section 4 of
+`PROJECT_PLAN.md`).
 
-EER spread across levels of each factor (`results/phase7/condition_breakdown.csv`):
+**Our systems are therefore NOT challenge-compliant.** This does not invalidate
+anything — this is a thesis, not a challenge entry, and 2019 eval was never our test
+set (2021 is, and it stayed untouched until Phase 7). But any table placing our
+systems next to challenge systems must state that we trained on ~3.3x the permitted
+data, including a partition the rules excluded. An examiner familiar with ASVspoof
+will look for exactly this, and it is far better volunteered than extracted.
 
-| factor | convention | spread | worst → best |
+### 7.15 Condition breakdown — decoded, and it reproduces the published findings
+
+The paper's **Table III** decodes every factor code, and **Table IX** (supplementary)
+names the actual hardware. Our columns map as:
+
+| our column | meaning | levels |
+|---|---|---|
+| `room` | `S_asv`, room for **voice presentation** (ASV side) | R1–R9, sizes in Table III |
+| `r` | `S_a`, room for **replay acquisition** (attacker side) | r1–r9 |
+| `mic` | `Q_asv,m`, **ASV** microphone | M1 Medium, M2 High, **M3 Low** |
+| `m` | `Q_a,m`, **attacker** microphone | m1 Medium, m2 High, **m3 Low** |
+| `s` | `Q_a,s`, attacker **replay device** | s2 Low, s3 Medium, **s4 High** |
+| `c` | `D_a`, attacker-to-talker distance | c2 1.5 m, c3 1.0 m, **c4 0.5 m** |
+| `dist` | `D_s` talker-to-ASV (bonafide) / `D'_s` attacker-to-ASV (spoof) | D1–D6 / d1–d6, d1 2.0 m → d4 0.5 m |
+
+Hardware (Table IX): **s2** = Sony SRS-XB43 (consumer Bluetooth), **s3** = Neumann
+KH 80 DSP, **s4** = Genelec 8030 CP (both studio monitors, ±2 dB passband specified;
+s2's is listed UNAVAILABLE). **m1/M1** = Marantz MPM-1000, **m2/M2** = M-Audio
+Uber-mic (SNR 110 dB), **m3/M3** = iPad Air MEMS mic.
+
+Our results (`results/phase7/condition_breakdown.csv`), against the paper's §III-B-2:
+
+| factor | our result | paper's published finding | |
 |---|---|---|---|
-| **`r`** (replay config) | pooled-bonafide | **24.50 pp** | r3 52.45% → r5 27.95% |
-| **`s`** | pooled-bonafide | **15.92 pp** | s4 47.62% → s3 31.70% |
-| `room` | within-group | 10.54 pp | R2 41.66% → R6 31.12% |
-| `m` | pooled-bonafide | 7.19 pp | m1 42.55% → m3 35.36% |
-| `mic` | within-group | 5.34 pp | M3 42.27% → M2 36.93% |
-| `c` | pooled-bonafide | 4.77 pp | c4 42.07% → c3 37.30% |
-| `dist` | pooled-bonafide | 3.88 pp | d1 41.37% → d4 37.49% |
+| `s` replay device | **s4 (High) hardest, 47.62%** | "min t-DCF is also higher for a better quality attacker replay device `Q_a,s` = s3 or s4" | ✅ |
+| `m` attacker mic | **m3 (Low) easiest, 35.36%** | "higher-quality m1 and m2 lead to higher min t-DCFs than m3 … a higher-quality microphone introduces less distortion" | ✅ |
+| `c` attacker-to-talker | **c4 (0.5 m) hardest, 42.07%** | "shorter `D_a` also lead to worse performance. At the closest position `D_a` = c4, min t-DCF values are the highest" | ✅ |
+| `mic` ASV mic | **M3 (Low) hardest, 42.27%** | conclusions: added difficulty "when the automatic speaker verification microphone is of lower quality" | ✅ |
+| `room` size | 10.54 pp spread, no size relation (R7 smallest at 40.06%, R1 largest at 38.16%) | "no substantial correlation between the room size and the min t-DCF values" | ✅ |
+| `dist` attacker-to-ASV | closer = **easier** (d4 0.5 m → 37.49%; d1 2.0 m → 41.37%) | "`D'_s` is observed to be inversely correlated with the min t-DCF" — i.e. closer = harder | ❌ **conflicts** |
 
-**The replay-side factors dominate and the room barely matters** — a 24.5 pp spread
-across `r` versus 10.5 pp across `room` and 5.3 pp across the ASV microphone. That is
-physically coherent and directly supports the thesis's premise: what is being detected
-is a *device* fingerprint imposed by the replay chain, not a property of the room.
+**Five of six reproduce published findings, using a different metric (EER vs min
+t-DCF) and an entirely different system.** That is strong independent corroboration
+and belongs in the results chapter as such.
 
-Condition **`r3` at 52.45% is worse than chance** — that configuration does not merely
-evade the system, it inverts it. `s4` (47.62%) is close behind. Identifying what `r3`
-and `s4` physically are, from the 2021 evaluation plan, would turn "it fails" into "it
-fails on X because Y" for the cost of a document lookup.
+**The mechanism, stated once because it is the thesis's premise made visible twice.**
+The same device quality acts in *opposite directions* depending on which side of the
+recording chain it occupies. A **low-quality attacker microphone (m3) makes detection
+EASIER** — it stamps extra distortion onto the spoof. A **low-quality ASV microphone
+(M3) makes detection HARDER** — it degrades the evidence at capture, for bonafide and
+spoof alike. Likewise s4 (Genelec, flattest specified passband) is hardest precisely
+because a better loudspeaker imposes *less* fingerprint. Note that the top-end
+differences between devices (20/22/25 kHz) are irrelevant here — everything above the
+8 kHz Nyquist is gone — so what is being detected is passband flatness and
+nonlinearity inside 0–8 kHz, exactly the electromechanical signature the thesis argues
+CQT preserves.
+
+**The one conflict, reported rather than buried.** For attacker-to-ASV distance our
+EER falls as the attacker gets closer, while the paper's min t-DCF rises. Two
+candidate explanations, neither verified: (i) the metrics differ, and t-DCF folds in
+ASV behaviour that EER does not; (ii) our pooled-bonafide convention (7.8) pools
+bonafide spanning *all six* talker positions against spoof at *one* attacker position,
+which could leak a level cue that a matched-distance comparison would not. Worth one
+paragraph and a flagged uncertainty; not worth over-claiming either way.
+
+**Two findings the paper does not report.** It excluded rooms from analysis after
+finding no *size* correlation — but room *identity* matters enormously. The attacker
+room `r` has a **24.50 pp spread** (r3 52.45%, worse than chance, vs r5 27.95%), and
+grouping by the room-triples the paper defines in its footnote 7
+(`{r1,r2,r3} {r4,r5,r6} {r7,r8,r9}`) gives group means of **46.7 / 31.8 / 39.7%**.
+Something about the second room group makes replay detection far easier, and it is
+not size. This is a genuinely novel observation and a good thesis discussion point.
 
 ### 7.16 Both controls came back clean
 
@@ -1406,9 +1482,98 @@ Extracted in the same pass as a free consistency check, never used for selection
 
 `progress` tracks `eval` closely for every system — a clean replication. But on
 **`hidden`, every non-augmented system collapses to chance (48–54%) while the two
-waveform-augmented systems hold at ~30%.** On the hardest subset, augmentation is the
-*only* thing that survives. This is the strongest single piece of evidence for the
-augmentation argument in the whole project and deserves its own investigation.
+waveform-augmented systems hold at ~30%.** Section 7.19 decomposes why.
+
+### 7.19 Decomposing `hidden` — the project's most important result
+
+The paper (§IV-A, §IV-B) reveals that PA `hidden` is **two different hidden tracks**:
+*hidden track 1* is **simulated** replay data, and *hidden track 2* is data with
+**non-speech removed** by VAD. Both are restricted to the D4 talker-to-ASV and d4
+attacker-to-ASV positions.
+
+Our metadata separates them exactly. `hidden` is 134,730 rows = **67,365 `notrim` +
+67,365 `trim`**, and both halves carry only `dist ∈ {D4, d4}` — matching the paper's
+description precisely. So `trim_flag` *is* the track label:
+**`notrim` = simulated replay, `trim` = non-speech removed.** With eval restricted to
+the same D4/d4 conditions as a matched reference:
+
+| system | eval D4/d4 (real, w/ non-speech) | → **simulated** | → **no non-speech** |
+|---|---|---|---|
+| `flatten_T400` | 40.12 | **56.42** (+16.3) | 51.61 (+11.5) |
+| `T400` | 39.55 | 54.44 (+14.9) | 53.49 (+13.9) |
+| `cmvn_T400` | 43.76 | 58.74 (+15.0) | 49.86 (+6.1) |
+| `baseline_T250` | 37.71 | 48.56 (+10.9) | 51.63 (+13.9) |
+| `T150` | 36.85 | 44.27 (+7.4) | 53.58 (+16.7) |
+| **`flatten_T400_aug1`** | 31.46 | **26.47 (−5.0)** | **30.20 (−1.3)** |
+| **`flatten_T400_aug`** | 30.89 | **26.72 (−4.2)** | 32.58 (+1.7) |
+| MFCC-SVM | 49.83 | 56.64 (+6.8) | 53.30 (+3.5) |
+| MFCC-RF | 41.57 | 44.63 (+3.1) | 37.68 (−3.9) |
+| CQCC-GMM *(official)* | 30.02 | 34.94 (+4.9) | 36.65 (+6.6) |
+| LFCC-GMM *(official)* | 32.16 | 36.47 (+4.3) | 39.09 (+6.9) |
+| LFCC-LCNN *(official)* | 49.02 | 48.98 (−0.0) | 51.65 (+2.6) |
+| RawNet2 *(official)* | 43.95 | 45.52 (+1.6) | 44.26 (+0.3) |
+
+**(a) Waveform augmentation INVERTS the simulated-data penalty — under a matched
+control.** Every official baseline and every non-augmented system of ours degrades on
+simulated replay. Only the augmented models *improve*, and **26.47% is the lowest EER
+this project achieves anywhere on 2021** — better than any eval number, and better
+than all four baselines on the same subset.
+
+This is not merely consistent with the challenge's own analysis; it is the controlled
+version of it. The paper's supplementary §X-C observes: *"not all the CMs performed
+worse on the simulated data … One notable difference is that T07, T16, and T04 used
+room-impulse-based data augmentation … This suggests that with certain training
+strategies, the CMs can do well on both the real and simulated data."* The organisers
+could only compare **different teams' entire systems**, which differ in front-end,
+backbone, ensembling and augmentation simultaneously. **We have the controlled
+experiment**: identical architecture, identical T, identical head, three points on a
+single augmentation dose axis, everything else held fixed. That converts a
+correlational remark into a causal demonstration — and the paper notes (§V) that
+*"post-challenge studies that employ ASVspoof 2021 PA data and work on replay attacks
+are rarely seen"*, so this lands in a genuinely under-explored area.
+
+Note also that the paper's own controlled augmentation study (supplementary Table
+XIII, on LA/DF) found only *"modest improvements"*, and on 2021 DF the best result
+came with **no** augmentation at all. Our PA effect — 7.08 pp, 17.8% relative,
+monotonic across three doses, plus this sign inversion — is a stronger demonstration
+than the organisers themselves obtained, on the task where it matters most.
+
+**(b) An uncomfortable finding, reported because it is true.** Removing non-speech
+costs the official baselines +0.3 to +6.9 pp, but costs our non-augmented models
+**+11.5 to +16.7 pp**. Our CQT-LCNNs lean on non-speech regions substantially harder
+than the published baselines do. The paper is explicit (§VI, Limitations) that
+non-speech *length* "is a database characteristic that should not serve as a cue for
+detection", and §IV-A notes CMs relying on non-speech may not detect reliably in the
+wild.
+
+Augmentation again largely removes the dependence (aug1 **−1.3**, aug3 +1.7), which is
+a third independent argument for it. **Partial confound to state**: VAD-trimmed clips
+are shorter, so the tiling factor rises — though `T150` degrading *most* (+16.7),
+despite tiling least, argues that tiling is not the whole explanation.
+
+This should be reported as a limitation of the system, not hidden. It also suggests a
+concrete follow-up: train on VAD-trimmed audio and see whether the dependence
+disappears without costing in-domain accuracy.
+
+### 7.20 Where these systems would have placed in the challenge
+
+Sorting the paper's Table XV evaluation column by EER, `flatten_T400_aug` at
+**32.665%** falls between T27 (32.00%) and T28 (32.96%) — **11th of 24** entries
+(23 challenge submissions and baselines, plus ours), ahead of 13 including all four
+official baselines. The best system in the entire PA track was **T07 at 24.25%**.
+
+**Two caveats, both mandatory whenever this is quoted:**
+
+1. The challenge ranked by **min t-DCF**, not EER (we have not computed t-DCF — see
+   `PROJECT_PLAN.md` §9.7), so this is a placement *on EER*, not a challenge placing.
+2. Our systems are **not challenge-compliant** on training data — see 7.14.
+
+Context worth carrying into the discussion chapter: the paper's own verdict is that
+PA *"appears to be the most challenging of the three"* tasks and that *"the
+performance of all systems is substantially worse than the ASV floor of 0.12"*. Every
+PA baseline sits at min t-DCF 0.943–1.000, i.e. effectively saturated. A 32.7% EER is
+not an outlier failure; it is the neighbourhood the entire field occupies on this
+task.
 
 ### 7.18 What this phase established
 
@@ -1423,6 +1588,15 @@ augmentation argument in the whole project and deserves its own investigation.
   reason and its timing.
 - **The thesis's central claim survives the hardest available test**, with the
   front-end advantage holding even without the augmentation win.
+- **The pipeline reproduces the published ASVspoof 2021 PA baselines exactly**, on
+  three independently-constructed subsets (7.12). Every number in the results chapter
+  is anchored to the published record, including the ones no one else has computed.
+- **Five of six published condition findings are independently reproduced** (7.15),
+  with a different metric and a different system — and two findings the challenge did
+  not report are added (attacker-room identity, and the room-group structure).
+- **Augmentation reverses the sign of the simulated-data penalty** (7.19) — the
+  controlled version of an effect the challenge organisers could only observe
+  correlationally across whole systems.
 - **The honest headline is dual**: our best system beats every official baseline, and
   it is still at 32.7% EER, which is not a deployable system. Both halves belong in the
   abstract.
