@@ -74,8 +74,13 @@ caveats that travel with that claim: the challenge ranked by min t-DCF rather th
 and these systems trained on ~3.3× the permitted data, so they are **not
 challenge-compliant**.
 
-Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.18; options for what
+Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.20; options for what
 to do next in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.
+
+Post-Phase-7 follow-up work is under way and is recorded **separately** from the
+pre-registered results, because it was designed after 2021 numbers were seen and carries
+no such guarantee — see the "Post-Phase 7" section of the progress report and
+[`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.3.1 for the declared decision rule.
 
 **2021 eval is now spent.** It is a clean generalisation estimate precisely because
 nothing was tuned on it; future work develops against the `progress` partition instead

@@ -1613,3 +1613,63 @@ section 9: develop against `progress`, keep `eval` for a single final confirmati
 report post-hoc work separately from the pre-registered results.
 
 Next: see `PROJECT_PLAN.md` section 9, "Options moving forward" — a menu, not a plan.
+
+---
+
+## Post-Phase 7 — follow-up work
+
+**Everything below this line is POST-HOC.** It was designed after 2021 eval numbers
+were seen, so it does not carry the pre-registration guarantee the Phase 7 table does.
+It is recorded separately for exactly that reason. The Phase 7 results stand unchanged
+as the clean generalisation estimate; nothing here revises them.
+
+The governing protocol is `PROJECT_PLAN.md` §9.0: **develop against `progress`, touch
+`eval` at most once more for a final confirmation.**
+
+### P1 — Does dev-EER checkpoint selection cost transfer performance? (No.)
+
+**Motivation.** `train_lcnn.py` uses dev EER for three things: the LR schedule, early
+stopping, and which epoch is saved as `_best.pt`. Phase 7 showed dev EER is
+*anti-correlated* with 2021 performance at the configuration level (7.13), so every
+2021 number in this report comes from an epoch chosen by a criterion known to mislead.
+If that bias also operates at the epoch level, all Phase 7 numbers would be
+systematically pessimistic and the recipe would need changing before any new run.
+
+**Method.** Each Phase 6 run saved two checkpoints: `_best.pt` (best dev epoch) and a
+rolling `lcnn_<tag>.pt` (last epoch). Both were scored on the **`progress` partition**
+(87,048 trials) — never used for selection and never the reported headline. `eval` was
+not touched. Two controls were built in: `cmvn_T400`'s best-dev epoch *is* its final
+epoch, so its two checkpoints are identical and must return exactly 0.000 pp; and every
+`best_dev` figure must reproduce the Phase 7 progress table.
+
+| system | best-dev ep → EER | last ep → EER | delta |
+|---|---|---|---|
+| `flatten_T400` | 23 → 37.537 | 30 → **36.520** | **−1.017** |
+| `T400` | 43 → 36.364 | 45 → 36.740 | +0.376 |
+| `cmvn_T400` | 30 → 42.525 | 30 → 42.525 | **0.000** ✅ control |
+| `flatten_T400_aug1` | 41 → 32.042 | 45 → 32.997 | +0.955 |
+| `flatten_T400_aug` | 29 → 29.795 | 30 → 30.059 | +0.264 |
+| `baseline_T250` | 28 → 32.683 | 30 → 33.232 | +0.549 |
+| `T150` | 13 → 31.973 | 21 → **31.392** | **−0.581** |
+
+Both controls passed: `cmvn_T400` returned exactly 0.000 pp, and all seven `best_dev`
+values reproduce the Phase 7 progress numbers exactly.
+
+**Result: a wash.** Last epoch wins 2 of 7; **mean delta +0.078 pp**, median +0.264 pp,
+scatter in both directions from −1.017 to +0.955.
+
+**Conclusion, and it is a useful distinction rather than a null finding.** Dev-based
+selection is sound at the *epoch* level while failing at the *configuration* level. Dev
+EER tracks "has this model finished learning" perfectly well; what it cannot do is
+answer "which configuration transfers". The Phase 7 inversion is therefore a property
+of the configurations, not an artifact of when training stopped.
+
+Two consequences:
+
+- **No Phase 7 number is systematically biased by epoch choice**, so nothing needs
+  recomputing, and new runs can use the standard recipe with no per-epoch checkpointing.
+- **A measured scale for checkpoint-choice noise: roughly ±0.5–1.0 pp.** This is a
+  *different* noise source from trial sampling (what bootstrap CIs in §9.6 would
+  measure) and is normally invisible. It provides a floor for judging whether a
+  difference between systems is meaningful — the 2.2 pp T250-vs-T400 gap clears it, but
+  not by a wide margin. Worth quoting in the thesis whenever two systems are compared.

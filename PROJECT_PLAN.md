@@ -984,12 +984,73 @@ anything run so far.
 showed it underfits rather than overfits), so there is a floor below which the model
 simply lacks context. The curve may turn over immediately.
 
-### 9.3 Combine 9.1 and 9.2 — the obvious untested cell
+### 9.3 Combine 9.1 and 9.2 — **IN PROGRESS, protocol declared below**
 
 **Every model on the augmentation axis was trained at T=400, the *worst* T for
 transfer.** `T150 + 3 augmented copies` has never been run. If the two effects are even
-partially additive, this is the most likely route to a materially better number, and it
-is a single training run.
+partially additive, this is the most likely route to a materially better number.
+
+#### 9.3.1 Declared protocol — written before the runs were scored
+
+This is **post-hoc exploration**, not pre-registration in the Phase 7 sense: the
+configuration was chosen after seeing 2021 results, so it carries no such guarantee and
+will be reported in a clearly separate section. What *is* fixed in advance, and is
+recorded here before any 2021 number exists for these models, is the **decision rule**.
+
+**Candidates** (both trained on the 2019 enriched resplit; 2021 is never trained on):
+
+```
+--tag flatten_T150_aug   --n-frames 150 --head flatten   --wav-aug-copies 3 --epochs 45
+--tag timepool_T150_aug  --n-frames 150 --head timepool  --wav-aug-copies 3 --epochs 45
+```
+
+**Why two, and why the head is the open variable.** The head axis *also* inverts between
+domains: at T=400, `flatten` wins on dev (0.798 vs 0.902) but `timepool` wins on **both**
+2021 subsets — 38.031 vs 39.747 on eval, 36.364 vs 37.537 on progress. Every augmented
+model to date is `flatten` and every short-T model is `timepool`, so the two are
+confounded and **augmented × timepool is an empty cell**. Choosing a head by reasoning
+from eval would be precisely the contamination §9.0 forbids, so both are trained and the
+choice is made on `progress`.
+
+**Why 45 epochs.** Phase 6 recorded that `aug3` hit its 30-epoch cap while dev EER was
+still falling, and that `aug1` received 45 against its control's 30 — an unequal-budget
+caveat that had to be disclosed. A common budget of 45 removes it; early stopping
+(patience 8) cuts either run short if it plateaus first.
+
+**Standard recipe, justified by measurement.** Dev-EER checkpointing is retained. The
+control in PROGRESS_REPORT P1 showed epoch selection by dev EER is unbiased for transfer
+(mean delta +0.078 pp over 7 systems), so no per-epoch checkpointing is needed and these
+runs stay methodologically identical to their Phase 6 parents.
+
+**Decision rule, fixed now:**
+
+1. Score both candidates on **`progress`** (87,048 trials).
+2. The lower `progress` EER wins. **If they differ by less than 1.0 pp, declare it a
+   tie and prefer `timepool`** — that is the measured scale of checkpoint-choice noise
+   (P1), so a smaller gap is not evidence, and `timepool` is the more parsimonious head
+   (184k vs 798k parameters at T=400) and the one that transfers better at matched T.
+3. Take **only the winner** to `eval`, once.
+4. Report both `progress` figures regardless, so the selection is visible rather than
+   implied.
+
+**Predictions, stated in advance so either outcome is a result:**
+
+1. **The combination beats both parents on 2021.** `T150+aug3` < both `T150` (34.420%)
+   and `flatten_T400_aug` (32.665%) on eval. If it lands *between* them, the two effects
+   overlap rather than add — informative either way.
+2. **`timepool` beats `flatten` at T=150 with augmentation**, extending the head
+   inversion already seen at T=400.
+3. **Dev EER will be worse than every Phase 6 system.** Both parents' effects hurt
+   in-domain (T150 6.584%, aug3 2.353%), so a combined dev EER above ~7% is expected and
+   is *not* a failure signal. This prediction exists to stop a bad dev number being
+   misread mid-run.
+
+#### 9.3.2 Boundary that must not be crossed
+
+If the winner's `eval` number is disappointing, **the answer is not to try another
+configuration and report that instead.** That converts `eval` into a tuning set
+retroactively and destroys the Phase 7 guarantee along with it. Further exploration
+after this point is scored on `progress` only, and `eval` is not revisited.
 
 ### 9.4 ~~Verify the official-baseline reproduction~~ — **DONE, verified exactly**
 
