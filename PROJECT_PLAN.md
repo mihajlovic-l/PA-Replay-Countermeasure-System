@@ -1104,7 +1104,19 @@ room-triples the paper defines in its footnote 7 split cleanly into group means 
   curve is a coarse step function and its EER sits in a large tie block. Either note the
   caveat or refit with more trees if RF stays in the headline table.
 
-### 9.7 min t-DCF — promoted after the paper analysis
+### 9.7 ~~min t-DCF~~ — **DONE, validated 8/8** (`src/tdcf.py`)
+
+Implemented from the tandem model in Kinnunen et al. (2020), since no official scoring
+code ships with the keys package, and **validated exactly against all eight published
+baseline values** (four systems x two partitions). Best system `flatten_T400_aug` scores
+**0.8347**, beating all four baselines and ranking **11th of 24 by min t-DCF — the same
+placement the EER ordering gave**. Both classical baselines saturate at ≈1.0000, i.e.
+they provide no benefit over a non-informative CM. EER and t-DCF disagree on two
+orderings, so both are now reported. Full detail in PROGRESS_REPORT P2.
+
+Original reasoning kept below.
+
+### 9.7-orig min t-DCF — promoted after the paper analysis
 
 EER was the metric chosen here, but **min t-DCF was the 2021 challenge's primary
 metric**, and the official ASV scores are already on disk (`PA-keys-full/keys/PA/ASV/`).

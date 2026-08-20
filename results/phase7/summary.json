@@ -19,7 +19,9 @@
     "tp_bonafide_accepted": 56679,
     "fn_bonafide_rejected": 37389,
     "tn_spoof_rejected": 377948,
-    "fp_spoof_accepted": 249316
+    "fp_spoof_accepted": 249316,
+    "min_tdcf": 0.9876193868141082,
+    "tdcf_threshold": -2.861319065093994
   },
   "best_overall": {
     "system": "flatten_T400_aug",
@@ -36,7 +38,9 @@
     "tp_bonafide_accepted": 63341,
     "fn_bonafide_rejected": 30727,
     "tn_spoof_rejected": 422369,
-    "fp_spoof_accepted": 204895
+    "fp_spoof_accepted": 204895,
+    "min_tdcf": 0.8347407729336723,
+    "tdcf_threshold": 1.5106453895568848
   },
   "systems": [
     {
@@ -54,7 +58,9 @@
       "tp_bonafide_accepted": 63341,
       "fn_bonafide_rejected": 30727,
       "tn_spoof_rejected": 422369,
-      "fp_spoof_accepted": 204895
+      "fp_spoof_accepted": 204895,
+      "min_tdcf": 0.8347407729336723,
+      "tdcf_threshold": 1.5106453895568848
     },
     {
       "system": "flatten_T400_aug1",
@@ -71,7 +77,9 @@
       "tp_bonafide_accepted": 62079,
       "fn_bonafide_rejected": 31989,
       "tn_spoof_rejected": 413956,
-      "fp_spoof_accepted": 213308
+      "fp_spoof_accepted": 213308,
+      "min_tdcf": 0.8514014556910107,
+      "tdcf_threshold": 0.78184974193573
     },
     {
       "system": "T150",
@@ -88,7 +96,9 @@
       "tp_bonafide_accepted": 61690,
       "fn_bonafide_rejected": 32378,
       "tn_spoof_rejected": 411359,
-      "fp_spoof_accepted": 215905
+      "fp_spoof_accepted": 215905,
+      "min_tdcf": 0.9019231423534513,
+      "tdcf_threshold": -1.0848760604858398
     },
     {
       "system": "baseline_T250",
@@ -105,7 +115,9 @@
       "tp_bonafide_accepted": 60377,
       "fn_bonafide_rejected": 33691,
       "tn_spoof_rejected": 402605,
-      "fp_spoof_accepted": 224659
+      "fp_spoof_accepted": 224659,
+      "min_tdcf": 0.9059415547450026,
+      "tdcf_threshold": -1.0724804401397705
     },
     {
       "system": "T400",
@@ -122,7 +134,9 @@
       "tp_bonafide_accepted": 58293,
       "fn_bonafide_rejected": 35775,
       "tn_spoof_rejected": 388710,
-      "fp_spoof_accepted": 238554
+      "fp_spoof_accepted": 238554,
+      "min_tdcf": 0.9588514834266596,
+      "tdcf_threshold": -2.176964282989502
     },
     {
       "system": "CQCC-GMM",
@@ -139,7 +153,9 @@
       "tp_bonafide_accepted": 58258,
       "fn_bonafide_rejected": 35810,
       "tn_spoof_rejected": 388475,
-      "fp_spoof_accepted": 238789
+      "fp_spoof_accepted": 238789,
+      "min_tdcf": 0.9433756104704769,
+      "tdcf_threshold": 0.423072
     },
     {
       "system": "LFCC-GMM",
@@ -156,7 +172,9 @@
       "tp_bonafide_accepted": 56874,
       "fn_bonafide_rejected": 37194,
       "tn_spoof_rejected": 379244,
-      "fp_spoof_accepted": 248020
+      "fp_spoof_accepted": 248020,
+      "min_tdcf": 0.9723946891144775,
+      "tdcf_threshold": -0.016414
     },
     {
       "system": "flatten_T400",
@@ -173,7 +191,9 @@
       "tp_bonafide_accepted": 56679,
       "fn_bonafide_rejected": 37389,
       "tn_spoof_rejected": 377948,
-      "fp_spoof_accepted": 249316
+      "fp_spoof_accepted": 249316,
+      "min_tdcf": 0.9876193868141082,
+      "tdcf_threshold": -2.861319065093994
     },
     {
       "system": "cmvn_T400",
@@ -190,7 +210,9 @@
       "tp_bonafide_accepted": 53179,
       "fn_bonafide_rejected": 40889,
       "tn_spoof_rejected": 354607,
-      "fp_spoof_accepted": 272657
+      "fp_spoof_accepted": 272657,
+      "min_tdcf": 0.9968961670491503,
+      "tdcf_threshold": -3.355273962020874
     },
     {
       "system": "LFCC-LCNN",
@@ -207,7 +229,9 @@
       "tp_bonafide_accepted": 51956,
       "fn_bonafide_rejected": 42112,
       "tn_spoof_rejected": 346443,
-      "fp_spoof_accepted": 280821
+      "fp_spoof_accepted": 280821,
+      "min_tdcf": 0.995841041087189,
+      "tdcf_threshold": 1.265688
     },
     {
       "system": "MFCC-RF",
@@ -224,7 +248,9 @@
       "tp_bonafide_accepted": 51321,
       "fn_bonafide_rejected": 42747,
       "tn_spoof_rejected": 337324,
-      "fp_spoof_accepted": 289940
+      "fp_spoof_accepted": 289940,
+      "min_tdcf": 0.9999748191104079,
+      "tdcf_threshold": 0.1066666692495346
     },
     {
       "system": "RawNet2",
@@ -241,7 +267,9 @@
       "tp_bonafide_accepted": 48345,
       "fn_bonafide_rejected": 45723,
       "tn_spoof_rejected": 322387,
-      "fp_spoof_accepted": 304877
+      "fp_spoof_accepted": 304877,
+      "min_tdcf": 0.9997339065620674,
+      "tdcf_threshold": -12.763670921325684
     },
     {
       "system": "MFCC-SVM",
@@ -258,7 +286,9 @@
       "tp_bonafide_accepted": 47378,
       "fn_bonafide_rejected": 46690,
       "tn_spoof_rejected": 315922,
-      "fp_spoof_accepted": 311342
+      "fp_spoof_accepted": 311342,
+      "min_tdcf": 0.9999888930483163,
+      "tdcf_threshold": -2.0476772785186768
     }
   ],
   "predictions": [

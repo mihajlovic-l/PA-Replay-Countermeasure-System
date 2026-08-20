@@ -19,16 +19,20 @@ challenge baselines — 943,110 files, zero extraction failures.
 
 ### Headline result — 2021 PA eval (721,332 trials)
 
-| system | 2021 EER | dev EER |
-|---|---|---|
-| **CQT-LCNN + waveform aug** (`flatten_T400_aug`) | **32.665%** | 2.353% |
-| CQT-LCNN, T=150 | 34.420% | 6.584% |
-| CQCC-GMM *(best official baseline)* | 38.068% | — |
-| LFCC-GMM *(official)* | 39.540% | — |
-| CQT-LCNN, best on dev (`flatten_T400`) | 39.747% | 0.798% |
-| LFCC-LCNN *(official)* | 44.768% | — |
-| RawNet2 *(official)* | 48.605% | — |
-| MFCC-SVM *(this project's classical baseline)* | 49.635% | 9.216% |
+`min t-DCF` is the ASVspoof 2021 **primary** metric for PA; our implementation
+reproduces all eight published baseline values exactly. A normalised t-DCF of 1.0 means
+a countermeasure provides no benefit at all over a non-informative one.
+
+| system | min t-DCF | 2021 EER | dev EER |
+|---|---|---|---|
+| **CQT-LCNN + waveform aug** (`flatten_T400_aug`) | **0.8347** | **32.665%** | 2.353% |
+| CQT-LCNN, T=150 | 0.9019 | 34.420% | 6.584% |
+| CQCC-GMM *(best official baseline)* | 0.9434 | 38.068% | — |
+| LFCC-GMM *(official)* | 0.9724 | 39.540% | — |
+| CQT-LCNN, best on dev (`flatten_T400`) | 0.9876 | 39.747% | 0.798% |
+| LFCC-LCNN *(official)* | 0.9958 | 44.768% | — |
+| RawNet2 *(official)* | 0.9997 | 48.605% | — |
+| MFCC-SVM *(this project's classical baseline)* | **1.0000** | 49.635% | 9.216% |
 
 **The measurement chain is verified against the published record.** Scoring the four
 official baselines with our own code reproduces Liu et al. (IEEE/ACM TASLP 2023,
@@ -68,10 +72,10 @@ methodological finding:
   organisers observed this effect correlationally across whole systems; here it is a
   controlled experiment with augmentation as the only variable.
 
-Placed against the challenge itself, the best system would rank **11th of 24** entries
-on EER (best in the PA track was 24.25%), ahead of all four baselines — with two
-caveats that travel with that claim: the challenge ranked by min t-DCF rather than EER,
-and these systems trained on ~3.3× the permitted data, so they are **not
+Placed against the challenge itself, the best system would rank **11th of 24** entries —
+**the same placement on min t-DCF as on EER**, ahead of all four baselines (best in the
+PA track was 0.6824 / 24.25%). One caveat travels with that claim: these systems trained
+on ~3.3× the permitted data, including a partition the rules excluded, so they are **not
 challenge-compliant**.
 
 Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.20; options for what

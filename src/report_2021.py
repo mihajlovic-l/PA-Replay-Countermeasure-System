@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm
 from sklearn.metrics import roc_curve
 
-from . import config, metrics
+from . import config, metrics, tdcf
 
 # Conditions whose groups contain BOTH classes, so each gets a genuine within-group
 # EER using its own bonafide -- answering "how does the system do in room R6".
@@ -87,17 +87,29 @@ def load_official(filenames: pd.Series) -> dict[str, np.ndarray]:
 # --- 7.1 / 7.2 / 7.3 -----------------------------------------------------------
 
 def system_table(df: pd.DataFrame, systems: list[str],
-                 official: dict[str, np.ndarray]) -> pd.DataFrame:
+                 official: dict[str, np.ndarray], asv: dict | None = None) -> pd.DataFrame:
+    """EER (7.1) plus the supplementary metrics at the EER threshold (7.2/7.3).
+
+    `asv` adds **min t-DCF**, the challenge's PRIMARY metric for PA. Reported alongside
+    EER rather than instead of it, because the two disagree in places: a system can post
+    a fair EER while being badly shaped in the cost-weighted region of the DET curve.
+    """
     dev = {**config.PHASE7_LCNN_SYSTEMS, **config.PHASE7_CLASSICAL_SYSTEMS}
     rows = []
     for tag in systems:
         m = df[tag].notna()
-        rep = metrics.full_report(df.loc[m, "y"].to_numpy(), df.loc[m, tag].to_numpy())
+        y, sc = df.loc[m, "y"].to_numpy(), df.loc[m, tag].to_numpy()
+        rep = metrics.full_report(y, sc)
+        if asv:
+            rep["min_tdcf"], rep["tdcf_threshold"] = tdcf.min_tdcf(y, sc, asv)
         rows.append({"system": tag, "kind": "this project", "n_trials": int(m.sum()),
                      "dev_eer_2019": dev.get(tag), **rep})
-    for name, sc in official.items():
-        m = ~np.isnan(sc)
-        rep = metrics.full_report(df.loc[m, "y"].to_numpy(), sc[m])
+    for name, s in official.items():
+        m = ~np.isnan(s)
+        y, sc = df.loc[m, "y"].to_numpy(), s[m]
+        rep = metrics.full_report(y, sc)
+        if asv:
+            rep["min_tdcf"], rep["tdcf_threshold"] = tdcf.min_tdcf(y, sc, asv)
         rows.append({"system": name, "kind": "official baseline",
                      "n_trials": int(m.sum()), "dev_eer_2019": None, **rep})
     return pd.DataFrame(rows).sort_values("eer").reset_index(drop=True)
@@ -329,6 +341,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--primary", default="flatten_T400")
     p.add_argument("--no-export", action="store_true")
+    p.add_argument("--no-tdcf", action="store_true",
+                   help="skip min t-DCF (avoids reading the 2.5M-row ASV protocol)")
     args = p.parse_args()
 
     out = config.PHASE7_DIR
@@ -344,10 +358,20 @@ def main() -> None:
     print(f"\nHEADLINE partition '{config.PA2021_REPORTED_PARTITION}': {len(headline):,} trials "
           f"({int(headline['y'].sum()):,} bonafide / {int((1-headline['y']).sum()):,} spoof)")
 
-    table = system_table(headline, systems, official)
+    # min t-DCF: the challenge's primary metric for PA. The ASV operating point is
+    # fixed on eval and reused everywhere -- see src/tdcf.py for why, and for the
+    # 8/8 validation against the published baseline values.
+    asv = None if args.no_tdcf else tdcf.asv_error_rates(tdcf.ASV_OPERATING_PARTITION)
+    if asv:
+        print(f"ASV operating point: EER {asv['asv_eer']*100:.3f}%, "
+              f"floor {tdcf.asv_floor(asv):.4f}")
+    table = system_table(headline, systems, official, asv)
     table.to_csv(out / "eer_table_2021.csv", index=False)
     print("\n=== 7.1/7.4  EER on 2021 PA eval ===")
-    show = table[["system", "kind", "eer", "dev_eer_2019", "roc_auc", "n_trials"]].copy()
+    cols = ["system", "kind", "eer", "dev_eer_2019", "roc_auc", "n_trials"]
+    if "min_tdcf" in table.columns:
+        cols.insert(3, "min_tdcf")
+    show = table[cols].copy()
     show["eer"] = (show["eer"] * 100).round(3)
     show["dev_eer_2019"] = (show["dev_eer_2019"] * 100).round(3)
     print(show.to_string(index=False))

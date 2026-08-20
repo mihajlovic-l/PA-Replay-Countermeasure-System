@@ -1673,3 +1673,96 @@ Two consequences:
   measure) and is normally invisible. It provides a floor for judging whether a
   difference between systems is meaningful — the 2.2 pp T250-vs-T400 gap clears it, but
   not by a wide margin. Worth quoting in the thesis whenever two systems are compared.
+
+### P2 — min t-DCF (`src/tdcf.py`), validated 8/8 against the published values
+
+**Motivation.** EER was this project's chosen metric, but **min t-DCF was the ASVspoof
+2021 primary metric** for PA. Reporting it puts our systems on the challenge's own axis
+(paper Table XV) instead of a secondary one, and the required ASV scores were already on
+disk.
+
+**No official scoring code ships with the keys package** (checked — the tarball contains
+only `trial_metadata.txt`, the baseline `score.txt` files and a README), so the metric
+was implemented from the tandem model in Kinnunen et al., IEEE/ACM TASLP 28 (2020),
+reference [9] of the challenge paper. The CM gates, then the ASV judges:
+
+```
+P(reject | target)    = Pmiss_cm + (1 - Pmiss_cm) * Pmiss_asv
+P(accept | nontarget) = (1 - Pmiss_cm) * Pfa_asv
+P(accept | spoof)     = Pfa_cm * Pfa_spoof_asv
+```
+
+Collecting in the CM's two error rates gives `t-DCF(s) = C0 + C1*Pmiss_cm + C2*Pfa_cm`,
+normalised by `C0 + min(C1, C2)` — the cost of the best non-informative CM. So a useless
+CM scores 1.0, and a perfect one scores `C0 / (C0 + min(C1,C2))`, the **ASV floor**.
+
+**Implemented to be verifiable, not merely plausible.** Two independent oracles: the
+published ASV floor, and all eight baseline min t-DCFs (four systems x two partitions).
+
+**A finding about the protocol, arrived at empirically.** Recomputing the ASV operating
+point *per partition* reproduced the eval values exactly but missed every progress value
+by 0.0006–0.0030. Holding the ASV point fixed at its **eval** value reproduced **both**
+partitions exactly. So the challenge fixes the ASV operating point once and reuses it —
+which is also correct on its own terms, since the t-DCF assesses a CM against a *fixed*
+ASV whose operating point must not drift with the CM subset under evaluation. Recorded
+in `src/tdcf.py` as `ASV_OPERATING_PARTITION`, with the evidence.
+
+**Validation — 8/8 exact at four decimals** (tolerance 0.0002):
+
+| baseline | ours (eval) | paper | ours (progress) | paper |
+|---|---|---|---|---|
+| CQCC-GMM | 0.9434 | 0.9434 | 0.9062 | 0.9062 |
+| LFCC-GMM | 0.9724 | 0.9724 | 0.9747 | 0.9747 |
+| LFCC-LCNN | 0.9958 | 0.9958 | 0.9827 | 0.9827 |
+| RawNet2 | 0.9997 | 0.9997 | 0.9993 | 0.9993 |
+
+ASV operating point: EER 6.483%, Pmiss 0.0648, Pfa 0.0648, **Pfa_spoof 0.9055** — the
+baseline ASV accepts 90.6% of replayed trials, which is precisely why a CM is needed.
+Coefficients C0 0.06713, C1 0.87337, C2 0.45276.
+
+**One unresolved minor discrepancy, reported not hidden.** Our ASV floor is **0.1291**;
+the paper states "the ASV floor of 0.12" in prose (§III-B-1). Since all eight baseline
+values reproduce to four decimals, the coefficients cannot be wrong, so the prose figure
+is evidently rounded or computed slightly differently. Not treated as a failure, and the
+exact value is what `src/tdcf.py` reports.
+
+**Results on 2021 PA eval** (`results/phase7/eer_table_2021.csv`, `min_tdcf` column):
+
+| system | min t-DCF | EER |
+|---|---|---|
+| **`flatten_T400_aug`** | **0.8347** | 32.665 |
+| `flatten_T400_aug1` | 0.8514 | 34.006 |
+| `T150` | 0.9019 | 34.420 |
+| `baseline_T250` | 0.9059 | 35.816 |
+| CQCC-GMM *(official)* | 0.9434 | 38.068 |
+| `T400` | 0.9589 | 38.031 |
+| LFCC-GMM *(official)* | 0.9724 | 39.540 |
+| `flatten_T400` | 0.9876 | 39.747 |
+| LFCC-LCNN *(official)* | 0.9958 | 44.768 |
+| `cmvn_T400` | 0.9969 | 43.468 |
+| RawNet2 *(official)* | 0.9997 | 48.605 |
+| MFCC-RF | 1.0000 | 45.833 |
+| MFCC-SVM | 1.0000 | 49.635 |
+
+**Three things this metric shows that EER did not.**
+
+1. **Placement is unchanged: 11th of 24, beating 13 of 23 challenge entries** — the same
+   rank the EER ordering gave (7.20). Two independent metrics agreeing on placement is
+   worth stating; it means the EER-based claim was not an artifact of metric choice.
+2. **Both classical baselines saturate at ≈1.0000** (MFCC-SVM 0.999989, MFCC-RF
+   0.999975). A normalised t-DCF of 1.0 means the CM delivers *no benefit whatsoever*
+   over a non-informative one that blindly accepts or rejects. That is a far sharper
+   statement than "49.6% EER", and it is the correct way to report the classical
+   baseline's failure on real replay.
+3. **EER and t-DCF disagree on two orderings, and t-DCF is the metric that counts.**
+   `T400` beats CQCC-GMM on EER (38.031 vs 38.068) but loses clearly on t-DCF (0.9589 vs
+   0.9434); MFCC-RF beats RawNet2 on EER (45.833 vs 48.605) yet is worse on t-DCF. A
+   system can post a respectable EER while being badly shaped in the cost-weighted region
+   of the DET curve. **Both metrics should be reported**, with the disagreements noted —
+   presenting EER alone would have overstated `T400` against a published baseline.
+
+`report_2021.py` now emits `min_tdcf` as standard (`--no-tdcf` skips the 2.5M-row ASV
+read). The ASV protocol and score files were verified **row-aligned across all 2,508,570
+rows**, so no join is needed and a streaming read keeps peak memory near 10 MB — which
+matters on this machine, where a naive pandas read of both would have cost most of the
+available headroom.
