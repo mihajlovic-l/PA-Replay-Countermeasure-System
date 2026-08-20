@@ -1092,7 +1092,30 @@ room-triples the paper defines in its footnote 7 split cleanly into group means 
   distance-matched bonafide instead of the pooled convention, to test whether our
   pooling leaks a level cue.
 
-### 9.6 Statistical rigour
+### 9.6 ~~Statistical rigour~~ — **DONE** (`src/bootstrap_ci.py`)
+
+B = 2000 replicates, both metrics, all 13 systems. **All nine registered comparisons
+survive.** Headline methodological result: honest speaker-clustered intervals are
+**14.3x wider** than the conventional trial-level ones (4.727 pp vs 0.330 pp mean
+width), because the effective sample size is **67 speakers**, not 721,332 trials.
+
+Pairing decided two verdicts: for prediction 1 the marginal intervals *overlap*
+(suggesting no effect) while the paired interval excludes zero decisively — comparing
+marginal CIs is systematically conservative and discards real effects.
+
+Weakest claims, to be phrased carefully rather than asserted flatly: the head comparison
+(margin 0.61 pp to zero) and prediction 1 (1.03 pp). The headline-vs-CQCC-GMM interval
+is the widest ([−9.37, −1.53]) because the GMM baselines are far more speaker-variable
+than our systems. Full detail in PROGRESS_REPORT P3.
+
+Still outstanding from the original item: the **MFCC-RF score-granularity caveat** (236
+distinct values from a 300-tree vote) and the dev→2021 **rank-inversion significance**
+(Spearman ρ = −0.607, p = 0.148, n = 7) — the bootstrap does not address either, since
+both concern quantities other than per-system error rates.
+
+Original reasoning kept below.
+
+### 9.6-orig Statistical rigour
 
 - **Bootstrap confidence intervals on EER.** With 721,332 trials these will be tight and
   cheap, and they are needed before claiming that e.g. the 2.2 pp T250-vs-T400 gap is

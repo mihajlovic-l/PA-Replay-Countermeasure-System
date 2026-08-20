@@ -1766,3 +1766,99 @@ read). The ASV protocol and score files were verified **row-aligned across all 2
 rows**, so no join is needed and a streaming read keeps peak memory near 10 MB — which
 matters on this machine, where a naive pandas read of both would have cost most of the
 available headroom.
+
+### P3 — Bootstrap confidence intervals (`src/bootstrap_ci.py`)
+
+Until now not a single number in this project carried an error bar. B = 2000 replicates,
+both metrics, all 13 systems, ~55 min of CPU.
+
+**Two schemes, and the gap between them is the finding.**
+
+- **Speaker-clustered (reported).** The 721,332 eval trials come from **67 speakers**,
+  and every one of a speaker's ~14,472 trials shares that voice. The unit that actually
+  repeats is the *speaker*, so replicates draw 67 speakers with replacement and take each
+  drawn speaker's trials as an indivisible block. The imagined experiment is "recruit 67
+  more speakers", not "collect 721,332 more trials".
+- **Trial-level (contrast).** The conventional choice, and far too narrow — it treats
+  14,472 trials from one voice as 14,472 independent observations.
+
+Both stratified by class. The design is perfectly regular (all 67 speakers have exactly
+1,404 bonafide trials; all 48 spoof-bearing speakers exactly 13,068 spoof), so
+class-stratified speaker resampling reproduces 94,068 / 627,264 **exactly** every time.
+
+**Headline methodological result: the honest intervals are 14.3x wider.**
+
+| | mean EER CI width |
+|---|---|
+| speaker-clustered | **4.727 pp** |
+| trial-level | 0.330 pp |
+
+Reporting ±0.17 pp on 721,332 trials would have been indefensible. The real precision is
+roughly **±1.5 to ±3.6 pp**, because the effective sample size is 67, not 721,332.
+
+| system | EER, speaker-clustered | trial-level |
+|---|---|---|
+| `flatten_T400_aug` | 32.66 **[30.21, 35.15]** ±2.47 | [32.52, 32.81] ±0.15 |
+| `T150` | 34.42 **[32.88, 35.98]** ±1.55 | [34.25, 34.58] ±0.16 |
+| `T400` | 38.03 **[36.44, 39.58]** ±1.57 | [37.85, 38.20] ±0.17 |
+| CQCC-GMM | 38.07 **[34.61, 41.82]** ±3.61 | [37.91, 38.22] ±0.16 |
+| `flatten_T400` | 39.75 **[38.24, 41.25]** ±1.51 | [39.58, 39.92] ±0.17 |
+| MFCC-SVM | 49.63 **[46.71, 52.71]** ±3.00 | [49.45, 49.80] ±0.18 |
+
+**All nine registered comparisons survive**, using paired difference CIs (same resample
+for both systems, so shared "was this a hard draw?" noise cancels). Sorted by how close
+each interval comes to zero — i.e. weakest claim first:
+
+| comparison | diff (pp) | 95% CI | margin to 0 | corr |
+|---|---|---|---|---|
+| head: flatten vs timepool @T400 | +1.70 | [+0.61, +2.76] | **0.61** | 0.77 |
+| **pred 1**: T250 vs T400 | −2.21 | [−3.35, −1.03] | **1.03** | 0.82 |
+| **headline**: best vs CQCC-GMM | −5.31 | [−9.37, −1.53] | **1.53** | 0.19 |
+| front-end: CQT vs LFCC-LCNN | −5.04 | [−7.73, −2.42] | 2.42 | 0.25 |
+| T axis: 150 vs 400 | −3.60 | [−4.60, −2.61] | 2.61 | 0.81 |
+| **pred 3**: CMVN | +5.42 | [+3.01, +7.84] | 3.01 | 0.38 |
+| **pred 2a**: mild augmentation | −5.70 | [−7.75, −3.63] | 3.63 | 0.51 |
+| **pred 2b**: aggressive augmentation | −7.02 | [−9.42, −4.60] | 4.60 | 0.35 |
+| central claim: CQT-LCNN vs MFCC-SVM | −16.97 | [−20.41, −13.44] | 13.44 | 0.19 |
+
+**Pairing is not a refinement — it decides two of these.** For prediction 1 the
+*marginal* intervals overlap by 1.46 pp, which by the usual eyeball test would mean "not
+distinguishable"; the paired interval excludes zero decisively, with T250 ahead in 100%
+of replicates. The mechanism is the **0.82 correlation**: `baseline_T250` and `T400` are
+near-relatives differing only in T, so they find the same speakers hard and that shared
+movement subtracts out. The head comparison (corr 0.77) is the same story.
+
+**Comparing marginal CIs is therefore systematically conservative** — it discards real
+effects. The CI of the *difference* is the test; overlapping error bars are not.
+
+**Three caveats to state plainly in the write-up:**
+
+- **The head comparison (margin 0.61 pp) and prediction 1 (1.03 pp) are the weakest
+  claims.** Both are significant but close to the boundary, and both depend on pairing.
+  They should be reported as "small but consistent", not asserted flatly.
+- **The headline comparison against CQCC-GMM is wide: [−9.37, −1.53].** Not because the
+  effect is small (5.31 pp) but because CQCC-GMM has the *widest* marginal interval of
+  any system (±3.61) and correlates poorly with ours (0.19), so almost nothing cancels.
+  Still significant, but the least secure of the three headline claims.
+- **The GMM baselines vary far more across speakers than our systems do** (CQCC-GMM
+  ±3.61, LFCC-GMM ±3.18, MFCC-SVM ±3.00, versus ±1.51–1.57 for the non-augmented
+  CQT-LCNNs). They are not merely worse on average — they are markedly less consistent
+  voice to voice. That is a substantive observation about *why* they lose, and it is
+  invisible in a point estimate.
+
+Also worth noting: the saturated systems have degenerate t-DCF intervals
+(MFCC-SVM [0.9999, 1.0000], MFCC-RF [0.9998, 1.0000]) — no resample recovers any value
+from them, confirming 1.0000 is a hard ceiling rather than a rounding artifact.
+
+**Implementation.** Each replicate is a multinomial reweighting of a once-sorted array
+(O(n) instead of re-sorting 721k scores 2000 times). Verified **exactly identical
+(0.000e+00)** to naive resample-and-recompute. That check initially "failed" at 5.3e-6,
+and the cause is worth recording: sklearn's `roc_curve` defaults to
+`drop_intermediate=True`, which prunes threshold points and can shift the EER crossing
+slightly. Against the complete threshold list the fast path agrees exactly. **Side
+effect worth knowing: every EER in this project comes through that thinned path, so all
+reported EERs carry a ~1e-6 (0.0001 pp) artifact** — negligible against ±1.5–3.6 pp
+intervals, but now documented rather than lurking.
+
+Artifacts: `results/phase7/bootstrap_ci_{systems,comparisons}.csv`,
+`bootstrap_ci_summary.json`.

@@ -81,6 +81,12 @@ challenge-compliant**.
 Full analysis in [`PROGRESS_REPORT.md`](PROGRESS_REPORT.md) §7.10–7.20; options for what
 to do next in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.
 
+**All results carry bootstrap confidence intervals**, and they are **speaker-clustered**:
+the 721,332 eval trials come from only **67 speakers**, so the honest intervals are
+**14.3× wider** than the conventional trial-level ones (±1.5–3.6 pp rather than ±0.17 pp).
+All nine registered comparisons remain significant under paired testing — including two
+that the usual "do the error bars overlap?" check would have wrongly discarded.
+
 Post-Phase-7 follow-up work is under way and is recorded **separately** from the
 pre-registered results, because it was designed after 2021 numbers were seen and carries
 no such guarantee — see the "Post-Phase 7" section of the progress report and
