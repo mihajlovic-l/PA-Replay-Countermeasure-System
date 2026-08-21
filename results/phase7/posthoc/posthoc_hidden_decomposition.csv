@@ -1,0 +1,7 @@
+,"eval D4/d4 (real, w/ non-speech)",hidden notrim = SIMULATED,hidden trim   = NO non-speech
+n,120222.0,67365.0,67365.0
+timepool_T150_aug,27.87,24.72,26.87
+flatten_T150_aug,,28.1,29.14
+flatten_T400_aug,30.89,26.72,32.58
+T150,36.85,44.27,53.58
+flatten_T400,40.12,56.42,51.61

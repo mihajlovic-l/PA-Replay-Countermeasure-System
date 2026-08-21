@@ -115,6 +115,39 @@ def system_table(df: pd.DataFrame, systems: list[str],
     return pd.DataFrame(rows).sort_values("eer").reset_index(drop=True)
 
 
+def posthoc_table(asv: dict | None) -> pd.DataFrame | None:
+    """Post-hoc systems, in their OWN table — never merged into the Phase 7 one.
+
+    These were trained after 2021 results were seen (PROJECT_PLAN.md 9.3.1), so they
+    carry no pre-registration guarantee and must not be tabulated alongside systems
+    that do. Each is reported on exactly the partitions its whitelist permits, so the
+    table itself shows that the losing candidate was never scored on eval.
+    """
+    if not config.PA2021_POSTHOC_SCORES.exists():
+        return None
+    d = pd.read_parquet(config.PA2021_POSTHOC_SCORES)
+    man = pd.read_parquet(config.MANIFESTS_DIR / "pa2021_cm.parquet",
+                          columns=["filename", "label"])
+    d = d.merge(man, on="filename")
+    d["y"] = (d["label"] == "bonafide").astype(int)
+
+    rows = []
+    for tag, parts in config.PHASE7_POSTHOC_SYSTEMS.items():
+        if tag not in d.columns:
+            continue
+        for part in parts:
+            sub = d[(d["partition"] == part) & d[tag].notna()]
+            if not len(sub) or sub["y"].nunique() < 2:
+                continue
+            y, sc = sub["y"].to_numpy(), sub[tag].to_numpy()
+            rep = metrics.full_report(y, sc)
+            if asv:
+                rep["min_tdcf"], _ = tdcf.min_tdcf(y, sc, asv)
+            rows.append({"system": tag, "kind": "post-hoc (not pre-registered)",
+                         "partition": part, "n_trials": len(sub), **rep})
+    return pd.DataFrame(rows) if rows else None
+
+
 # --- 7.5 -----------------------------------------------------------------------
 
 def condition_breakdown(df: pd.DataFrame, system: str) -> pd.DataFrame:
@@ -328,9 +361,9 @@ def export_score_txt(df: pd.DataFrame, systems: list[str]) -> None:
     """
     for tag in systems:
         sub = df.loc[df[tag].notna(), ["filename", tag]]
-        sub.to_csv(config.PHASE7_SCORES_DIR / f"{tag}.score.txt",
+        sub.to_csv(config.PHASE7_PREREG_SCORES_DIR / f"{tag}.score.txt",
                    sep=" ", header=False, index=False, float_format="%.6f")
-    print(f"  exported {len(systems)} score.txt files -> {config.PHASE7_SCORES_DIR}")
+    print(f"  exported {len(systems)} score.txt files -> {config.PHASE7_PREREG_SCORES_DIR}")
 
 
 # --- main ----------------------------------------------------------------------
@@ -345,7 +378,7 @@ def main() -> None:
                    help="skip min t-DCF (avoids reading the 2.5M-row ASV protocol)")
     args = p.parse_args()
 
-    out = config.PHASE7_DIR
+    out = config.PHASE7_PREREG_DIR      # frozen Phase 7 deliverable
     df, systems = load_scores()
     print(f"loaded {len(df):,} scored files, {len(systems)} systems: {', '.join(systems)}")
     print(f"partitions present: {df['partition'].value_counts().to_dict()}")
@@ -375,6 +408,20 @@ def main() -> None:
     show["eer"] = (show["eer"] * 100).round(3)
     show["dev_eer_2019"] = (show["dev_eer_2019"] * 100).round(3)
     print(show.to_string(index=False))
+
+    ph = posthoc_table(asv)
+    if ph is not None:
+        ph.to_csv(config.PHASE7_POSTHOC_DIR / "posthoc_table_2021.csv", index=False)
+        print("\n=== POST-HOC systems (NOT pre-registered — reported separately) ===")
+        cols = ["system", "partition", "eer", "roc_auc", "n_trials"]
+        if "min_tdcf" in ph.columns:
+            cols.insert(3, "min_tdcf")
+        show = ph[cols].copy()
+        show["eer"] = (show["eer"] * 100).round(3)
+        print(show.to_string(index=False))
+        print("  (partitions per system are whitelisted in "
+              "config.PHASE7_POSTHOC_SYSTEMS:\n"
+              "   only the progress-selected winner was ever scored on eval)")
 
     # Consistency check across the non-headline partitions -- free, since they were
     # extracted in the same pass. Never used to select anything.

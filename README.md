@@ -87,10 +87,25 @@ the 721,332 eval trials come from only **67 speakers**, so the honest intervals 
 All nine registered comparisons remain significant under paired testing — including two
 that the usual "do the error bars overlap?" check would have wrongly discarded.
 
-Post-Phase-7 follow-up work is under way and is recorded **separately** from the
-pre-registered results, because it was designed after 2021 numbers were seen and carries
-no such guarantee — see the "Post-Phase 7" section of the progress report and
-[`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.3.1 for the declared decision rule.
+### Post-Phase-7 follow-up (reported separately — not pre-registered)
+
+Combining the two axes that transferred best — short context and waveform augmentation —
+gives **`timepool_T150_aug` at 31.081% EER / 0.8090 min t-DCF**, a new best point
+estimate ranking **10th of 24 by EER and 9th by t-DCF** against the challenge. It reaches
+**24.72% EER / 0.6818 t-DCF** on the simulated hidden track, the best figures in the
+project.
+
+Stated with the result, as it must be: the gain over the previous best is
+**[−3.87, +0.63] — not statistically distinguishable**, though it *is* significantly
+better than its unaugmented parent, the pre-registered primary, and every official
+baseline. The two effects turned out **sub-additive**; augmentation does most of the work.
+
+This work was designed after 2021 numbers were seen, so it carries none of the
+pre-registration guarantee the Phase 7 table does and lives in its own registry and its
+own tables. The decision rule — compare on `progress`, take only the winner to `eval`
+once — was declared in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) §9.3.1 before either run was
+scored, and is **enforced in code**: the candidate that lost has no eval scores at all,
+because they were never computed.
 
 **2021 eval is now spent.** It is a clean generalisation estimate precisely because
 nothing was tuned on it; future work develops against the `progress` partition instead
@@ -121,9 +136,15 @@ EDA/            -- EDA plots and summaries (tracked in git; small, illustrative)
 explanations/   -- teaching figures (e.g. how ROC-AUC relates to pairwise ranking)
 results/        -- grouped per phase (phase5/{svm,rf}/, phase6/<run>/, phase7/);
                    summaries, tables and figures tracked, bulky per-file score dumps
-                   gitignored. phase7/ holds the final EER table, DET curves, condition
-                   breakdown, both controls and the verdicts on the registered
-                   predictions
+                   gitignored
+  phase7/preregistered/   FROZEN. The single scored pass over the held-out set against
+                          the system list and predictions fixed BEFORE it was touched:
+                          headline EER/t-DCF table, condition breakdown, both controls,
+                          DET curves, prediction verdicts. Nothing new is added here.
+  phase7/posthoc/         Everything designed after those results were seen, and
+                          everything from now on: bootstrap CIs, post-hoc system tables,
+                          hidden-track decomposition. Carries no pre-registration
+                          guarantee and is never tabulated as though it does.
 PROJECT_PLAN.md     -- full thesis plan, reasoning, and dataset breakdown
 PROGRESS_REPORT.md  -- detailed log of work completed so far
 

@@ -1,0 +1,21 @@
+{
+  "tag": "timepool_T150_aug",
+  "n_frames": 150,
+  "norm": "unit",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 26,
+  "epochs_run": 34,
+  "train_eer_at_best": 0.06305322128851538,
+  "eer": 0.08906948718209114,
+  "threshold": 0.76178074,
+  "accuracy": 0.9109329154953377,
+  "precision_bonafide": 0.7381761622213261,
+  "recall_bonafide": 0.9109262813677401,
+  "f1_bonafide": 0.8155030866161777,
+  "roc_auc": 0.9687083180391659,
+  "tp_bonafide_accepted": 12814,
+  "fn_bonafide_rejected": 1253,
+  "tn_spoof_rejected": 46485,
+  "fp_spoof_accepted": 4545
+}

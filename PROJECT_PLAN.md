@@ -984,7 +984,30 @@ anything run so far.
 showed it underfits rather than overfits), so there is a floor below which the model
 simply lacks context. The curve may turn over immediately.
 
-### 9.3 Combine 9.1 and 9.2 — **IN PROGRESS, protocol declared below**
+### 9.3 Combine 9.1 and 9.2 — **DONE.** New best, honestly bounded
+
+`timepool_T150_aug`: **31.081% EER / 0.8090 min t-DCF** on 2021 PA eval — a new best
+point estimate, ranking **10th of 24 by EER and 9th by t-DCF**, up from 11th on both.
+All three declared predictions held; the decision rule chose on the 1.62 pp `progress`
+gap rather than falling to its tie-break; `eval` was touched once, for one model.
+
+**The limit, stated with the result:** the improvement over the previous best is
+**[−3.87, +0.63] — not statistically distinguishable**. It *is* significantly better than
+its unaugmented parent, the pre-registered primary, and every official baseline. The two
+effects proved **sub-additive** (predicted ≈27.3% if additive, observed 31.081%):
+augmentation does most of the work.
+
+Best figures anywhere in the project come from its hidden-track scores — **24.72% EER /
+0.6818 t-DCF on the simulated subset** — and it is the first system that barely degrades
+when non-speech is removed. Full detail in PROGRESS_REPORT P4.
+
+**§9.3.2's boundary now applies**: the answer to "the headline margin is not significant"
+is *not* to try another configuration and report that one instead. Further exploration is
+scored on `progress`, and `eval` is not revisited.
+
+Original protocol kept below, unchanged, as the record of what was declared in advance.
+
+### 9.3-orig Combine 9.1 and 9.2 — protocol as declared
 
 **Every model on the augmentation axis was trained at T=400, the *worst* T for
 transfer.** `T150 + 3 augmented copies` has never been run. If the two effects are even
@@ -1153,7 +1176,24 @@ show separation than the EER numbers suggest: every PA baseline sits at min t-DC
 discriminates in a region where EER is compressed. Moderate work, high citability,
 and it overlaps with the Phase 8 ASV extension already sketched.
 
-### 9.8 Score fusion — measured, and it does not pay
+### 9.8b Fusion with an ANTI-CORRELATED baseline — the strongest remaining lead
+
+§9.8 below measured fusion **among our own systems** and found it worthless (~0.13 pp).
+That was the worst case for fusion and should not have been generalised: those systems
+correlate **+0.35 to +0.82** across speaker resamples, so they fail on the same voices
+and there is nothing to recover.
+
+P4 found the opposite situation. `timepool_T150_aug` vs **CQCC-GMM** correlates
+**−0.15 — negative**: when a speaker draw is hard for our CQT-LCNN it is slightly *easy*
+for the CQCC-GMM. **Complementary failure modes across speakers is precisely the
+condition under which fusion pays**, and the baseline scores are already on disk.
+
+Cheap to test (no GPU, no retraining), and it must be developed on `progress` with at
+most one confirmation on `eval` (§9.0). Two honest caveats: what gets reported is then a
+*fusion*, not a CQT-LCNN, which changes the thesis's claim; and it inherits the
+training-data non-compliance noted in PROGRESS_REPORT 7.14.
+
+### 9.8 Score fusion — measured among our own systems, and it does not pay
 
 Estimated on `progress` only, leaving `eval` untouched: mean-z fusion of the three best
 systems gives **29.668%** against **29.795%** for the best single system — a gain of

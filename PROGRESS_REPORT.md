@@ -1862,3 +1862,102 @@ intervals, but now documented rather than lurking.
 
 Artifacts: `results/phase7/bootstrap_ci_{systems,comparisons}.csv`,
 `bootstrap_ci_summary.json`.
+
+### P4 — `T150 + augmentation`: a new best, and an honest limit on the claim
+
+The one combination the axes pointed at but nobody had run: every augmented model was
+trained at **T=400, the worst T for transfer**, and every short-T model was unaugmented.
+The protocol — candidates, decision rule, tie-break and three predictions — was fixed in
+`PROJECT_PLAN.md` §9.3.1 **before either run was scored** (commit `f6a99ba`).
+
+**All three declared predictions held.**
+
+| prediction (declared in advance) | outcome |
+|---|---|
+| **1.** combination beats *both* parents on 2021 | ✅ 31.081% vs `T150` 34.420% and `flatten_T400_aug` 32.665% |
+| **2.** timepool beats flatten at T=150 with augmentation | ✅ 29.359% vs 30.983% on `progress` |
+| **3.** dev EER worse than every Phase 6 system | ✅ 8.91% / 8.70% vs 6.584% for the worst Phase 6 run |
+
+Prediction 3 earned its keep. It existed only so a bad dev number would not be misread
+mid-run — and dev EER did land at 8.9%, the worst in the project, while the system became
+the best on 2021. Without it written down beforehand, the honest reaction at epoch 20
+would have been "this is not working".
+
+**The decision rule decided rather than deferred.** `flatten` 30.983% vs `timepool`
+29.359% on `progress` — a 1.62 pp gap, clearing the 1.0 pp tie threshold, so the winner
+was chosen on the gap and not on the default. (The default would have picked timepool
+anyway; because the threshold was fixed in advance, that agreement is evidence rather
+than coincidence.) **`eval` was touched once, for one model.**
+
+**Result on 2021 PA eval — and the limit on it, in the same breath:**
+
+| | EER | min t-DCF |
+|---|---|---|
+| **`timepool_T150_aug`** | **31.081%** | **0.8090** |
+| `flatten_T400_aug` (previous best) | 32.665% | 0.8347 |
+| CQCC-GMM (best official baseline) | 38.068% | 0.9434 |
+
+Ranks **10th of 24 by EER and 9th by t-DCF** against the challenge (Table XV), up from
+11th on both. Closes **21.9%** of the gap between "no countermeasure" and "perfect",
+against 19.0% before and 6.5% for the best baseline.
+
+But the speaker-clustered paired CIs (B=2000) say plainly:
+
+| comparison | EER diff | 95% CI | verdict |
+|---|---|---|---|
+| vs previous best `flatten_T400_aug` | −1.62 pp | **[−3.87, +0.63]** | **not distinguishable** |
+| vs parent `T150` (no aug) | −3.35 pp | [−5.08, −1.64] | significant |
+| vs pre-registered primary `flatten_T400` | −8.64 pp | [−10.71, −6.65] | significant |
+| vs best official baseline CQCC-GMM | −6.93 pp | [−11.65, −2.36] | significant |
+
+Same on t-DCF: −0.0263 [−0.0644, +0.0142] against the previous best, spanning zero. **So
+the honest headline is: a new best point estimate that significantly beats one parent,
+the pre-registered primary and every official baseline — but whose margin over the
+previous best system cannot be demonstrated.**
+
+**The effects are SUB-additive, not additive.** An earlier draft of this section claimed
+otherwise and was wrong. Taking `T400` (timepool, no aug, 38.031%) as the common
+ancestor: short-T alone gives −3.61 pp, augmentation alone −7.08 pp; additive would
+predict ≈27.3%, and the observed value is **31.081%**. The two overlap substantially,
+which is mechanistically sensible — both work by reducing reliance on 2019-specific
+structure, so they are partly doing the same job. **Augmentation does most of the work;
+short-T adds a point-estimate gain that cannot be shown to be real.**
+
+**On the hidden tracks the new system is stronger still**
+(`results/phase7/posthoc_hidden_decomposition.csv`), extending 7.19:
+
+| subset | `timepool_T150_aug` | `flatten_T400_aug` | `T150` | `flatten_T400` |
+|---|---|---|---|---|
+| eval D4/d4 (real) | **27.87** | 30.89 | 36.85 | 40.12 |
+| hidden — **simulated** | **24.72** | 26.72 | 44.27 | 56.42 |
+| hidden — no non-speech | **26.87** | 32.58 | 53.58 | 51.61 |
+
+Two things follow. Its min t-DCF on the simulated track is **0.6818**, the best figure
+this project produces anywhere — though *not* comparable to the challenge's best of
+0.6824, which is on the eval set. And it is **the first system that barely degrades when
+non-speech is removed** (27.87 → 26.87, versus +1.7 pp for `flatten_T400_aug` and +11 to
++17 pp for the unaugmented models), which substantially answers the dependence flagged in
+7.19(b).
+
+**A new lead, from the correlation column.** `timepool_T150_aug` vs CQCC-GMM correlates
+**−0.15 — negative**: when a speaker draw is hard for our CQT-LCNN it is slightly *easy*
+for the CQCC-GMM. Their failure modes are complementary across speakers, which is exactly
+the condition under which fusion pays. That reframes the negative fusion result in §9.8,
+which was measured **among our own systems** (correlations 0.35–0.82 — the worst case).
+Fusing with an anti-correlated *official baseline* is a different proposition, and those
+scores are already on disk.
+
+**Process note, recorded because it nearly went wrong.** These numbers first existed only
+in terminal output while this section was being drafted. That is backwards. They are now
+persisted canonically (`src/score_posthoc.py` → `posthoc_scores.parquet`,
+`results/phase7/posthoc_table_2021.csv`, score.txt exports) and regenerable in one
+command.
+
+The systems live in a **separate** `config.PHASE7_POSTHOC_SYSTEMS` registry — never in
+`PHASE7_LCNN_SYSTEMS` — so the pre-registered table cannot be silently widened. That
+registry stores a **partition whitelist per system**, and `score_posthoc.py` filters rows
+*before* the forward pass, so `flatten_T150_aug` has no eval column at all: not NaN, not
+unreported, never computed. `bootstrap_ci.py` inherits the guarantee automatically by
+admitting only systems with complete eval coverage. **The declared rule now lives in the
+data path rather than in a document** — written down, it depends on whoever reads it next;
+enforced in code, it holds regardless.

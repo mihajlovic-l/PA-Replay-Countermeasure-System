@@ -1,0 +1,21 @@
+{
+  "tag": "flatten_T150_aug",
+  "n_frames": 150,
+  "norm": "unit",
+  "head": "flatten",
+  "params": 388817,
+  "best_epoch": 29,
+  "epochs_run": 37,
+  "train_eer_at_best": 0.06564892623716152,
+  "eer": 0.08695475883931134,
+  "threshold": 0.5265452,
+  "accuracy": 0.9130374671643855,
+  "precision_bonafide": 0.7432010184006481,
+  "recall_bonafide": 0.9130589322527902,
+  "f1_bonafide": 0.8194200771954449,
+  "roc_auc": 0.9695811892418607,
+  "tp_bonafide_accepted": 12844,
+  "fn_bonafide_rejected": 1223,
+  "tn_spoof_rejected": 46592,
+  "fp_spoof_accepted": 4438
+}

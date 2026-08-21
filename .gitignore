@@ -24,7 +24,7 @@ models/
 # independently, but they are regenerable from the cached scores in seconds
 # (src.report_2021), so they are kept locally rather than versioned. The summaries,
 # tables and figures in results/phase7/ ARE tracked.
-results/phase7/scores/
+results/phase7/*/scores/
 
 # Python
 __pycache__/

@@ -59,6 +59,11 @@ COMPARISONS = [
     ("flatten_T400", "LFCC-LCNN", "front-end: CQT vs LFCC (both unaugmented)"),
     ("flatten_T400", "T400", "head: flatten vs timepool at T=400"),
     ("T150", "T400", "T axis: 150 vs 400"),
+    # post-hoc (PROJECT_PLAN 9.3.1); skipped automatically if not scored
+    ("timepool_T150_aug", "flatten_T400_aug", "post-hoc: new best vs previous best"),
+    ("timepool_T150_aug", "T150", "post-hoc: vs parent (T150, no augmentation)"),
+    ("timepool_T150_aug", "flatten_T400", "post-hoc: vs pre-registered primary"),
+    ("timepool_T150_aug", "CQCC-GMM", "post-hoc: vs best official baseline"),
 ]
 
 
@@ -80,6 +85,16 @@ def load_eval() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
             s = pd.read_csv(path, sep=r"\s+", names=["filename", name])
             d = d.merge(s, on="filename", how="left")
             systems.append(name)
+
+    # Post-hoc systems, if scored. Only those with COMPLETE eval coverage can be
+    # bootstrapped here -- which structurally excludes the candidate that lost on
+    # `progress`, since it was never scored on eval at all (its column is all-NaN).
+    if config.PA2021_POSTHOC_SCORES.exists():
+        ph = pd.read_parquet(config.PA2021_POSTHOC_SCORES).drop(columns=["partition"])
+        d = d.merge(ph, on="filename", how="left")
+        for tag in config.PHASE7_POSTHOC_SYSTEMS:
+            if tag in d.columns and d[tag].notna().all():
+                systems.append(tag)
 
     y = (d["label"] == "bonafide").to_numpy().astype(np.int8)
     spk = d["speaker_id"].to_numpy()
@@ -276,8 +291,8 @@ def main() -> None:
             })
 
     t = pd.DataFrame(rows); c = pd.DataFrame(diffs)
-    t.to_csv(config.PHASE7_DIR / "bootstrap_ci_systems.csv", index=False)
-    c.to_csv(config.PHASE7_DIR / "bootstrap_ci_comparisons.csv", index=False)
+    t.to_csv(config.PHASE7_POSTHOC_DIR / "bootstrap_ci_systems.csv", index=False)
+    c.to_csv(config.PHASE7_POSTHOC_DIR / "bootstrap_ci_comparisons.csv", index=False)
 
     for scheme in ("speaker-clustered", "trial-level"):
         s = t[t.scheme == scheme].sort_values("eer")
@@ -299,13 +314,13 @@ def main() -> None:
     ratio = widths["speaker-clustered"] / widths["trial-level"]
     print(f"\nmean EER CI width: speaker-clustered {widths['speaker-clustered']:.3f} pp "
           f"vs trial-level {widths['trial-level']:.3f} pp — **{ratio:.1f}x wider**")
-    (config.PHASE7_DIR / "bootstrap_ci_summary.json").write_text(json.dumps({
+    (config.PHASE7_POSTHOC_DIR / "bootstrap_ci_summary.json").write_text(json.dumps({
         "replicates": B, "seed": args.seed, "n_speakers": int(len(np.unique(spk))),
         "mean_ci_width_speaker": float(widths["speaker-clustered"]),
         "mean_ci_width_trial": float(widths["trial-level"]),
         "width_ratio": float(ratio),
     }, indent=2), encoding="utf-8")
-    print(f"written to {config.PHASE7_DIR}")
+    print(f"written to {config.PHASE7_POSTHOC_DIR}")
 
 
 if __name__ == "__main__":

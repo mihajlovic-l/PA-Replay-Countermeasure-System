@@ -1,8 +1,0 @@
-{
-  "replicates": 2000,
-  "seed": 42,
-  "n_speakers": 67,
-  "mean_ci_width_speaker": 4.726601277487038,
-  "mean_ci_width_trial": 0.3304229105450001,
-  "width_ratio": 14.304702024720301
-}

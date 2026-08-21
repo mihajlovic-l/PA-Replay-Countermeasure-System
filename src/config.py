@@ -285,6 +285,23 @@ PHASE7_LCNN_SYSTEMS = {
 # Classical Phase 5 baselines, scored from the cached 2021 MFCC in a second pass.
 PHASE7_CLASSICAL_SYSTEMS = {"MFCC-SVM": 0.09216, "MFCC-RF": 0.11736}
 
+# --- POST-HOC systems (NOT pre-registered) -------------------------------------
+# Trained after 2021 results were seen, so they carry none of the guarantee the
+# dicts above do. Deliberately a SEPARATE registry: the Phase 7 table must remain
+# exactly as pre-registered, and post-hoc work is reported in its own section.
+#
+# The value is the partitions each system may be scored on, enforcing the decision
+# rule declared in PROJECT_PLAN.md 9.3.1 *in code* rather than by memory:
+#   - both candidates were compared on `progress` (the declared decision set);
+#   - ONLY the winner (timepool) was taken to `eval`, once;
+#   - the loser (flatten) is never scored on eval, so no post-hoc "best of two on
+#     eval" can be reported even by accident.
+# `hidden` is neither, so both may be scored there (it feeds the 7.19 analysis).
+PHASE7_POSTHOC_SYSTEMS = {
+    "timepool_T150_aug": ("progress", "eval", "hidden"),   # winner
+    "flatten_T150_aug":  ("progress", "hidden"),           # not selected
+}
+
 # Which partitions to extract. The HEADLINE number is PA2021_REPORTED_PARTITION
 # ("eval", 721,332 rows) exactly as pre-registered; `progress` and `hidden` are
 # extracted in the same pass (+~30% runtime) purely as a free consistency check,
@@ -292,12 +309,35 @@ PHASE7_CLASSICAL_SYSTEMS = {"MFCC-SVM": 0.09216, "MFCC-RF": 0.11736}
 PHASE7_PARTITIONS = ("eval", "progress", "hidden")
 
 PHASE7_DIR = RESULTS_DIR / "phase7"
+# Phase 7 results are split in two, and the split is methodological rather than
+# cosmetic:
+#
+#   preregistered/  The Phase 7 deliverable, FROZEN. Produced by the single scored
+#                   pass over the held-out set against the system list fixed in
+#                   advance (section 6, phase 7). Nothing is added here again.
+#                   Re-running report_2021 reproduces it byte-for-byte, since the
+#                   inputs and code are deterministic -- but no NEW artifact belongs
+#                   in it, because nothing designed after 2021 was seen can carry
+#                   the guarantee the contents of this folder carry.
+#
+#   posthoc/        Everything since, and everything from now on. Designed with
+#                   knowledge of the 2021 results, so it carries no pre-registration
+#                   guarantee and must never be tabulated as though it does.
+#
+# The bootstrap CIs live in posthoc/ even though they describe pre-registered
+# systems: the ANALYSIS was designed after the fact, and the frozen folder holds the
+# deliverable as it stood, not every later thing said about it.
+PHASE7_PREREG_DIR = PHASE7_DIR / "preregistered"
+PHASE7_POSTHOC_DIR = PHASE7_DIR / "posthoc"
 # score.txt exports, one per system, in the official ASVspoof submission format
 # (`FILENAME SCORE`, higher = bonafide -- the convention metrics.py fixes
 # project-wide). ~20MB each, so gitignored; the summaries/figures beside them are
 # tracked. Exporting these lets an examiner recompute every reported EER from a
 # text file, without the 45GB corpus or this pipeline.
-PHASE7_SCORES_DIR = PHASE7_DIR / "scores"
+# Split to match: each folder's score.txt exports cover exactly its own systems, so
+# the pre-registered set cannot be silently widened by a stray export.
+PHASE7_PREREG_SCORES_DIR = PHASE7_PREREG_DIR / "scores"
+PHASE7_POSTHOC_SCORES_DIR = PHASE7_POSTHOC_DIR / "scores"
 
 # All bulky Phase 7 intermediates live on E:, never in the OneDrive-synced repo.
 PA2021_WORK_DIR = ASVSPOOF_ROOT / "phase7_2021"
@@ -308,6 +348,9 @@ PA2021_CLASSICAL_SHARD_DIR = PA2021_WORK_DIR / "classical_scores"
 PA2021_CQT_INDEX = PA2021_WORK_DIR / "cqt_index.parquet"
 PA2021_LCNN_SCORES = PA2021_WORK_DIR / "lcnn_scores.parquet"
 PA2021_CLASSICAL_SCORES = PA2021_WORK_DIR / "classical_scores.parquet"
+# Post-hoc system scores, kept in their own file so the pre-registered score table
+# cannot be silently widened -- see PHASE7_POSTHOC_SYSTEMS above.
+PA2021_POSTHOC_SCORES = PA2021_WORK_DIR / "posthoc_scores.parquet"
 PA2021_FAILURES_CSV = PA2021_WORK_DIR / "extraction_failures.csv"
 
 # The 2021 pooled MFCC table IS cached (~500MB for all partitions), unlike the
@@ -356,7 +399,9 @@ PHASE7_VERIFY_N = 200
 # the run outright. 20 chunks = 80,000 files between rebuilds, a few seconds each.
 PHASE7_RECYCLE_EVERY = 20
 
-for d in (PHASE7_DIR, PHASE7_SCORES_DIR, PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
+for d in (PHASE7_DIR, PHASE7_PREREG_DIR, PHASE7_POSTHOC_DIR,
+          PHASE7_PREREG_SCORES_DIR, PHASE7_POSTHOC_SCORES_DIR,
+          PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
           PA2021_MFCC_SHARD_DIR, PA2021_SCORE_SHARD_DIR, PA2021_CLASSICAL_SHARD_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
