@@ -1176,7 +1176,125 @@ show separation than the EER numbers suggest: every PA baseline sits at min t-DC
 discriminates in a region where EER is compressed. Moderate work, high citability,
 and it overlaps with the Phase 8 ASV extension already sketched.
 
-### 9.8b Fusion with an ANTI-CORRELATED baseline — the strongest remaining lead
+### 9.8b Fusion with the official baselines — **PROTOCOL DECLARED BELOW, then run**
+
+#### 9.8b.1 Declared protocol — fixed before eval was touched
+
+Post-hoc, so no pre-registration guarantee; what is fixed in advance is the **method,
+the candidate set and the selection rule**, recorded before any eval number exists.
+
+**Method.** Score-level linear fusion: z-normalise each system's scores, then logistic
+regression. Weights are needed rather than plain averaging because the partners are
+7–17 pp worse than our system, and equal-weight averaging of unequal systems is what
+made §9.8's attempt fail.
+
+**Candidates** (fixed here; not chosen from results):
+
+| name | systems |
+|---|---|
+| `ours` | `timepool_T150_aug` alone — the reference |
+| `ours+2GMM` | + CQCC-GMM + LFCC-GMM |
+| `ours+4base` | + all four official baselines |
+| `ours+all` | + `flatten_T400_aug` + all four baselines |
+
+Also reported: **equal-weight** fusion of the same sets, to show whether the trained
+weights are doing real work or the gain is just from averaging.
+
+**Development.** Speaker-disjoint K-fold cross-validation on the **`progress`**
+partition (87,048 trials). Folds split by *speaker*, not by trial, for the reason
+established in P3: trials from one voice are not independent, so a trial-level split
+would leak between fit and test and flatter every candidate.
+
+**Selection: the one-standard-error rule.** Take the candidate with the lowest CV EER;
+among all candidates whose CV EER is within **1 standard error** of it, choose the one
+with the **fewest systems**. Standard practice in model selection, and it exists to stop
+a marginally-better-but-more-complex combination being preferred on noise — which is
+exactly the failure mode a fusion sweep invites.
+
+**Confirmation.** Refit the selected candidate on *all* of `progress`, then apply it
+**once** to `eval`. z-normalisation statistics come from `progress` only, so no eval
+information enters the model. Running the eval step requires an explicit
+`--confirm-eval` flag; development is what the module does by default.
+
+**Predictions, stated in advance:**
+
+1. **Fusion beats the single system on eval**, by roughly 2–3 pp EER — the range measured
+   on a speaker-disjoint progress split before this protocol was written.
+2. **`ours+2GMM` is selected**, because the two GMMs captured 97% of the available gain
+   on progress (−2.82 pp of −2.92 pp) and the 1-SE rule prefers parsimony.
+3. **Trained weights beat equal-weight fusion**, because the partners are much weaker and
+   need down-weighting.
+
+#### 9.8b.1a What fusion costs the thesis — four things it breaks
+
+Written out because it decides how the result is *reported*, not just what it scores.
+
+1. **You cannot beat a baseline by including it.** The Phase 7 headline is "our system
+   beats all four official baselines". A system *containing* CQCC-GMM and LFCC-GMM
+   cannot make that claim — it is circular. The comparison anchoring the results chapter
+   becomes incoherent for the fused system.
+2. **The front-end isolation argument collapses.** Section 6.3 chose the LCNN backbone
+   *specifically* so "CQT-LCNN vs LFCC-LCNN" varies exactly one thing — the front-end —
+   which is what makes the thesis's central claim attributable. A fusion containing
+   cepstral front-ends and GMM backends isolates nothing; it is a combination that
+   happens to perform well.
+3. **The system stops being ours.** Its performance depends on score files we did not
+   produce and cannot regenerate. Fine for a challenge entry, awkward as a thesis
+   contribution.
+4. **It stops being zero-shot — the deepest one.** Every Phase 7 result comes from
+   systems trained *only* on 2019, which never saw a single 2021 file; that is what makes
+   "generalises to real replay" meaningful. Fitting fusion weights on `progress` means
+   the system has seen **87,048 labelled 2021 trials**. The claim silently changes from
+   *"a countermeasure trained purely on simulated replay transfers to real replay"* to
+   *"with a modest amount of labelled target-domain data, performance improves by ~X"*.
+   Both are legitimate — challenge rules permitted `progress` — but they are **different
+   scientific statements**, and conflating them would be the most serious methodological
+   error available here.
+
+**Therefore: the thesis's primary system remains the single CQT-LCNN**, and fusion is
+reported as a clearly separated extension. Framed that way it contributes three things
+without damaging anything — it aligns with universal practice (all top-5 systems in all
+three 2021 tracks fused), it gives **direct evidence of complementarity** between CQT-LCNN
+and cepstral-GMM front-ends, which *supports* the front-end argument rather than
+undermining it, and it **bounds the remaining headroom** available from combination as
+opposed to better single models.
+
+A more ambitious alternative, if time allows: train **our own** CQCC-GMM and/or LFCC-GMM
+and fuse only in-house systems. That preserves the "beats the baselines" claim and turns
+fusion into a *direct test of the central premise*. Costs: CQCC is derivable from the
+cached CQT with no audio re-decoding (~3–5 h), while LFCC needs a fresh 943k-file
+extraction (~6–8 h) despite being the better partner. Two systems suffice — the two GMMs
+captured 97% of the available gain on progress (−2.82 pp of −2.92 pp).
+
+#### 9.8b.2 Why fusion is expected to work here — evidence gathered first
+
+Measured on `progress`, per-file, against `timepool_T150_aug`:
+
+| partner | Spearman ρ | rescue | if independent | ratio |
+|---|---|---|---|---|
+| `flatten_T400_aug` (ours) | 0.797 | 31.2% | 70.2% | **0.44** REDUNDANT |
+| CQCC-GMM | 0.284 | 52.3% | 63.7% | 0.82 |
+| **LFCC-GMM** | **0.101** | 58.9% | 60.2% | **0.98** near-independent |
+| LFCC-LCNN | 0.244 | 46.9% | 57.8% | 0.81 |
+| RawNet2 | 0.117 | 48.6% | 54.0% | 0.90 |
+
+"Rescue" is the share of *our* errors that the partner gets right; the independence
+reference is the partner's own accuracy `1 − EER_B`, **not** 50%. A ratio near 1.0 means
+the partner's errors are statistically independent of ours.
+
+**LFCC-GMM is the best partner despite being the worst system in the table (39.8% EER)**
+— decorrelation matters more than partner quality, though not without limit: RawNet2 is
+also decorrelated (ρ 0.117) but at 46% EER has too little to contribute. Fusion gain is
+roughly *decorrelation × partner strength*, and a partner must satisfy both.
+
+This is also why fusing our own systems fails: `flatten_T400_aug` agrees with us on
+ranking (ρ 0.797) *and* fails on the same files (ratio 0.44), so §9.8's null result was
+not a fluke but the predictable consequence of combining near-duplicates.
+
+Every top-5 system in **all three** ASVspoof 2021 tracks used score fusion (challenge
+paper Table V), so a single-system submission is the outlier.
+
+#### 9.8b.3 Original motivation (kept)
 
 §9.8 below measured fusion **among our own systems** and found it worthless (~0.13 pp).
 That was the worst case for fusion and should not have been generalised: those systems

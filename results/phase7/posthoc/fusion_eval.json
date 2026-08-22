@@ -1,0 +1,17 @@
+{
+  "selected": "ours+2GMM",
+  "systems": [
+    "timepool_T150_aug",
+    "CQCC-GMM",
+    "LFCC-GMM"
+  ],
+  "n_fit_trials": 87048,
+  "cv_eer": 26.841234254428702,
+  "cv_eer_se": 0.4504430190960893,
+  "eval_eer": 28.806675909584666,
+  "eval_tdcf": 0.7725327549080028,
+  "single_eval_eer": 31.080620723669682,
+  "single_eval_tdcf": 0.8090022974057779,
+  "zero_shot": false,
+  "note": "weights fitted on labelled 2021 progress; contains systems we did not build; not comparable against the official baselines"
+}
