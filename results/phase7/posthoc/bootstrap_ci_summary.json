@@ -4,5 +4,9 @@
   "n_speakers": 67,
   "mean_ci_width_speaker": 4.723492248707968,
   "mean_ci_width_trial": 0.3294514770427112,
-  "width_ratio": 14.337444442829433
+  "width_ratio": 14.337444442829433,
+  "aggregate_systems": 14,
+  "excluded_from_aggregate": [
+    "fusion_ours+2GMM"
+  ]
 }

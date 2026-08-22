@@ -13,5 +13,34 @@
   "single_eval_eer": 31.080620723669682,
   "single_eval_tdcf": 0.8090022974057779,
   "zero_shot": false,
-  "note": "weights fitted on labelled 2021 progress; contains systems we did not build; not comparable against the official baselines"
+  "note": "weights fitted on labelled 2021 progress; contains systems we did not build; not comparable against the official baselines",
+  "weights": {
+    "note": "logistic-regression coefficients on z-normed scores, fitted on the 87,048 labelled progress trials only; comparable across systems because every column was scaled to unit variance",
+    "intercept": -2.1304717248072738,
+    "per_system": [
+      {
+        "system": "timepool_T150_aug",
+        "coef": 1.0741919844273162,
+        "coef_share": 0.5978781537266455,
+        "z_mean": -2.234793976598072,
+        "z_std": 2.4616487478730824
+      },
+      {
+        "system": "CQCC-GMM",
+        "coef": 0.4028231809355087,
+        "coef_share": 0.2242049681877071,
+        "z_mean": 0.6925283019138866,
+        "z_std": 0.3238299725610321
+      },
+      {
+        "system": "LFCC-GMM",
+        "coef": 0.31965858451706264,
+        "coef_share": 0.17791687808564724,
+        "z_mean": 0.547306551718592,
+        "z_std": 0.5091905708617849
+      }
+    ],
+    "reproduces_stored_eval_scores": true,
+    "max_abs_diff_vs_stored": 2.3841515961464665e-07
+  }
 }

@@ -1961,3 +1961,253 @@ unreported, never computed. `bootstrap_ci.py` inherits the guarantee automatical
 admitting only systems with complete eval coverage. **The declared rule now lives in the
 data path rather than in a document** — written down, it depends on whoever reads it next;
 enforced in code, it holds regardless.
+
+### P5 — Fusion follow-ups: the weights, and how fragile the selection was
+
+The §9.8b.1 fusion run held all three of its declared predictions (`ours+2GMM` selected;
+**28.807%** EER on eval against **31.081%** for the single system, −2.274 pp; trained
+weights beating equal-weight 3/3). Reviewing that run against its own protocol exposed
+three gaps. The protocol for closing them — method, artifacts, controls and **eight new
+predictions** — was fixed in `PROJECT_PLAN.md` §9.8b.4 before any of these numbers
+existed. Two are done; the third is a single command away.
+
+Nothing here touches `eval` as a decision. A and B compute on `progress` alone.
+
+#### P5a — The fitted weights, and a prediction that was wrong
+
+`fuse.py` fitted the logistic regression and returned only `decision_function`, so the
+coefficients — which §9.8b.1a names as the *direct evidence of complementarity* that
+justifies doing fusion at all — existed nowhere. `--weights-only` recovers them by fitting
+on `progress` alone, since eval enters the original code only at `decision_function`.
+
+| system | coef | share | z-mean | z-std |
+|---|---|---|---|---|
+| `timepool_T150_aug` | **1.0742** | 59.8% | −2.2348 | 2.4616 |
+| CQCC-GMM | 0.4028 | 22.4% | 0.6925 | 0.3238 |
+| LFCC-GMM | 0.3197 | 17.8% | 0.5473 | 0.5092 |
+| *intercept* | −2.1305 | | | |
+
+The z-std column is why z-normalisation was not cosmetic: the three systems' raw scores
+differ ~8x in dynamic range, and without rescaling the coefficients would encode that
+rather than any contribution. **The two GMMs together carry 40.2% of the weight** — a
+substantial share, not a token one.
+
+**Prediction A1 ✅** — all three positive, ours largest. **Prediction A3 ✅** — coefficients
+stable across folds (below). **Prediction A2 ❌ REFUTED**, and it is the most useful
+outcome here.
+
+A2 predicted **|w_LFCC-GMM| > |w_CQCC-GMM|** — that the *more decorrelated* partner
+(ρ 0.101 vs 0.284) would earn the larger weight despite being the worse system, as a
+direct test of §9.8b.2's *gain ≈ decorrelation × strength* model. The observed ordering is
+the reverse. Two things caused it, and only the first is a mistake:
+
+**1. The prediction mixed partitions.** §9.8b.2's decorrelation figures are measured on
+`progress`, but the strength gap quoted alongside them (39.54% vs 38.07%) is from **eval**.
+The weights are fitted on `progress`, where the gap between the two GMMs is far larger:
+
+| partner | progress EER | eval EER | ρ with ours |
+|---|---|---|---|
+| CQCC-GMM | **36.331%** | 38.068% | 0.284 |
+| LFCC-GMM | **39.788%** | 39.540% | 0.101 |
+
+3.46 pp apart on progress against 1.47 pp on eval — **2.4x wider**. Feeding each partition
+into the heuristic as `(1 − ρ) × (0.5 − EER)` makes the consequence exact:
+
+| strength taken from | CQCC-GMM | LFCC-GMM | heuristic prefers |
+|---|---|---|---|
+| eval | 0.0854 | 0.0940 | LFCC-GMM ← the prediction |
+| **progress** (where the fit happens) | **0.0979** | 0.0918 | **CQCC-GMM** ← observed |
+
+**The model was not refuted; it was evaluated on the wrong partition.** Read on progress it
+predicts the observed ordering, and even the magnitude is close — heuristic ratio 1.07
+against an observed coefficient ratio of 1.26. The lesson is narrow and worth carrying:
+*a quantity used to predict a fitted parameter must be measured on the data the fit sees.*
+
+**2. A partial coefficient was never predictable from marginal correlations anyway.**
+§9.8b.2's table is pairwise — each partner against ours. But a logistic-regression
+coefficient is a **partial** one, and the two GMMs correlate **0.358 with each other**,
+*higher than either correlates with our primary* (0.284 and 0.101):
+
+|  | `timepool_T150_aug` | CQCC-GMM | LFCC-GMM |
+|---|---|---|---|
+| `timepool_T150_aug` | 1.000 | 0.284 | 0.101 |
+| CQCC-GMM | 0.284 | 1.000 | **0.358** |
+| LFCC-GMM | 0.101 | **0.358** | 1.000 |
+
+So the weight is split between two partly-redundant cepstral partners, and how it splits
+depends on a correlation the declared evidence table never contained. The prediction was
+structurally under-determined — which is a finding about *what that table can support*,
+not just about this one wrong call. It is also a substantive result in its own right: the
+two cepstral-GMM front-ends are more like each other than either is like the CQT-LCNN,
+which is precisely the front-end-family structure the thesis argues for, visible here in
+the fusion's internals rather than in an EER table.
+
+Persisted: `fusion_eval.json` (`weights` block), `fusion_weights_cv.csv`,
+`fusion_partner_diagnostics.csv`. **Control passed** — the recovered coefficients applied
+to the eval features already on disk reproduce the stored fused scores to
+**2.38e-07**, i.e. float32 storage rounding, confirming these are the weights that
+produced the reported number rather than a plausible-looking refit.
+
+**Two further results from capturing weights for *every* candidate, not just the selected
+one** (`fusion_weights_sweep.csv`, mean coefficient over 300+ folds):
+
+| system | `ours` | `ours+2GMM` | `ours+4base` | `ours+all` |
+|---|---|---|---|---|
+| `timepool_T150_aug` | **1.168** | 1.075 | 1.052 | **0.769** |
+| `flatten_T400_aug` | | | | **0.446** |
+| CQCC-GMM | | 0.402 | 0.412 | 0.387 |
+| LFCC-GMM | | 0.320 | 0.313 | 0.306 |
+| LFCC-LCNN | | | 0.126 | 0.062 |
+| RawNet2 | | | **−0.072** | **−0.079** |
+
+**1. The CQT-LCNN family's total weight is conserved.** Our primary alone earns 1.168. In
+`ours+all` it drops to 0.769 while `flatten_T400_aug` takes 0.446 — summing to **1.215,
+within 4% of the single-model value**. The fusion treats two CQT-LCNNs (ρ 0.797) as *one
+system's worth of evidence, split two ways*. That is §9.8's null result restated as a
+measured quantity rather than an absence, and it is a far sharper way to report
+redundancy than "the gain was 0.13 pp".
+
+**2. RawNet2 receives a stable NEGATIVE weight** — −0.072 and −0.079, at ±0.018 across the
+folds, so roughly 4 SD from zero rather than noise. Those two candidates are partly
+working by **inverting an official baseline**. It does not touch the reported system,
+which does not contain RawNet2, but it is a second and independent reason the parsimony
+arm landing on `ours+2GMM` was fortunate: "we improved by flipping the sign on a published
+baseline" is not a defensible thesis sentence. Recorded because `fuse.py`'s docstring
+commits to negative weights being *visible* rather than smoothed over.
+
+The GMM weights barely move as partners are added (CQCC 0.402 → 0.412 → 0.387, LFCC
+0.320 → 0.313 → 0.306), so **the two GMMs are not redundant with LFCC-LCNN or RawNet2** —
+their contribution is robust to what else is in the pool, which supports the selected
+system rather than merely tolerating it.
+
+#### P5b — The selection margin: 70%, and unanimous where it matters
+
+`ours+2GMM` cleared the 1-SE threshold by **0.162 pp** at the one fold split that was run
+— thin enough that the parsimony arm of the rule may have been decided by the shuffle.
+Swept over **40 splits** (20 seeds × K ∈ {5, 10}; K is included because §9.8b.1 declared
+"K-fold" without fixing K, and SE ~ 1/√K).
+
+| candidate | n | selected | in the 1-SE band |
+|---|---|---|---|
+| `ours` | 1 | **0/40** | **0/40** |
+| **`ours+2GMM`** | 3 | **28/40 (70%)** | 28/40 |
+| `ours+4base` | 5 | 11/40 | 39/40 |
+| `ours+all` | 6 | 1/40 | 40/40 |
+
+**All three predictions hold. B1 ✅** — `ours` never enters the band, in any split. **The
+fusion-vs-no-fusion half of the decision is unanimous**, which is the half the headline
+rests on. **B2 ✅** — 70%, inside the declared 50–80%. **B3 ✅** — all 12 flips go toward
+*more* systems, none toward `ours`.
+
+**K makes no difference at all: 14/20 at K=5 and 14/20 at K=10.** The 1-SE band does widen
+and narrow with K as expected, but the candidates' spacing scales with it, so the rule's
+verdict is unchanged. `ours+2GMM`'s headroom has median +0.158 pp over a range of
+[−0.355, +0.587].
+
+**The honest reading, and it is conservative rather than damaging.** The specific 3-system
+configuration is a 70% call, not a certainty, and that belongs in the write-up. But every
+flip goes to a candidate with *lower* CV EER, so had the shuffle landed differently the
+reported system would have been slightly **better** on CV, not worse — the reported result
+is the more modest of the plausible outcomes. And no split anywhere in the sweep would
+have abandoned fusion.
+
+**Weight stability over 300 folds** (prediction A3, tested far harder than on the 5 folds
+it was written for): `timepool_T150_aug` ±2%, CQCC-GMM ±7%, LFCC-GMM ±8% of their means,
+all well inside the declared ±25%. The weights are a property of the systems, not of the
+split.
+
+Persisted: `fusion_seed_sensitivity.csv`, `fusion_weights_sweep.csv`. **Control passed** —
+seed 42 at K=5 reproduces the recorded `fusion_cv_progress.csv` to **3.55e-15**.
+
+#### P5c — Confidence interval on the fusion gain: significant, and one of the weakest claims here
+
+The −2.274 pp gain is the only headline in this project without an error bar. `fusion_
+ours+2GMM` is now wired into `bootstrap_ci.py` through a third registry
+(`config.PHASE7_FUSION_SYSTEMS`), which keeps it out of the two that carry the zero-shot
+guarantee, and one comparison is added: **vs `timepool_T150_aug`, the single system it
+contains**. `fusion_ours+2GMM` vs CQCC-GMM is *deliberately absent* — you cannot beat a
+baseline by including it (§9.8b.1a.1) — and the refusal is written into the code beside
+the comparison list rather than left to memory.
+
+Two reporting decisions, settled in §9.8b.4: the fusion is **excluded from the CI-width
+aggregate** (which backs the published "14.3x wider" claim about the 14 zero-shot systems)
+and **stays out of `posthoc_table_2021.csv`**, because tabulating a non-zero-shot system
+beside zero-shot ones is the conflation §9.8b.1a.4 calls the most serious error available
+here. Its canonical record is `fusion_eval.json`, which carries `zero_shot: false`.
+
+**Result, B = 2000, speaker-clustered:**
+
+| | EER | 95% CI | min t-DCF | 95% CI |
+|---|---|---|---|---|
+| `fusion_ours+2GMM` | 28.81 | [26.53, 31.06] | 0.7725 | [0.7214, 0.8220] |
+| `timepool_T150_aug` | 31.08 | [28.79, 33.47] | 0.8090 | [0.7597, 0.8555] |
+| **paired difference** | **−2.30** | **[−3.74, −0.78]** | **−0.0371** | **[−0.0689, −0.0036]** |
+
+**The gain is real: the paired CI excludes zero on both metrics**, and fusion wins in
+**99.8%** of the 2000 speaker resamples. Prediction C2 also holds, emphatically — the
+marginal intervals overlap over 2.27 pp of their range, so the eyeball test would have
+called this "no effect". It is the third time in this project that pairing decides a
+comparison the marginal CIs cannot (P3).
+
+**Control passed.** All **13** pre-existing comparisons and all 14 zero-shot systems
+reproduce their published values exactly, and the width ratio came back **14.337** —
+the "14.3x wider" figure in P3 is untouched, confirming both that appending a system
+cannot perturb the shared resample stream and that the aggregate exclusion worked.
+
+**The sub-predictions were wrong, and the reason is worth more than the result.** C1
+predicted `corr_eer` **> 0.90** and a CI of roughly **[−3.2, −1.4]**. Observed: **corr
+0.786**, CI **[−3.74, −0.78]** — about **1.7x wider** than predicted.
+
+The prediction was **internally inconsistent**, and that is the lesson. I argued the
+correlation would be high *because the fused score contains the single system* — while
+ignoring that the 40.2% of weight carried by the two GMMs was selected precisely for
+being decorrelated from us. CQCC-GMM's speaker-level correlation with `timepool_T150_aug`
+is **−0.153**: negative. Injecting 40% of a negatively-correlated component *necessarily*
+pulls the fused system's per-speaker behaviour away from its parent's. **You cannot have
+both "the partner is decorrelated enough to be worth fusing" and "the fusion tracks its
+parent tightly across speakers"** — those are the same quantity, read twice with opposite
+signs. The mechanism that makes fusion work is the mechanism that widens this interval.
+
+**Consequence for the write-up, and it must not be softened.** Because the correlation is
+0.786 rather than >0.90, less cancels in the pairing, and the margin from the CI to zero
+is **0.78 pp** — the *second narrowest of every significant comparison in the project*,
+behind only the head comparison (0.61 pp):
+
+| rank | comparison | diff | 95% CI | margin |
+|---|---|---|---|---|
+| — | post-hoc: new best vs previous best | −1.62 | [−3.87, +0.63] | *not distinguishable* |
+| 1 | head: flatten vs timepool @T400 | +1.70 | [+0.61, +2.76] | 0.61 |
+| **2** | **fusion vs the single system it contains** | **−2.30** | **[−3.74, −0.78]** | **0.78** |
+| 3 | pred 1: T250 vs T400 | −2.21 | [−3.35, −1.03] | 1.03 |
+| 4 | headline: best vs CQCC-GMM | −5.31 | [−9.37, −1.53] | 1.53 |
+
+So the honest phrasing is P3's, for the same reason: **"small but consistent"**, not
+asserted flatly. The t-DCF interval says the same thing more sharply — its upper bound is
+**−0.0036**, which clears zero by almost nothing. What carries the claim is not the margin
+but the **99.8% sign consistency**: the *direction* is about as well established as this
+data can establish anything, while the *magnitude* is loosely bounded between roughly
+0.8 and 3.7 pp.
+
+Artifacts: `bootstrap_ci_{systems,comparisons}.csv`, `bootstrap_ci_summary.json`
+(now carrying `aggregate_systems` and `excluded_from_aggregate` so the exclusion is
+auditable rather than implicit).
+
+#### P5 scorecard
+
+Eight predictions were declared in §9.8b.4 before any of these numbers existed. **Six
+held, two were refuted**, and both refutations were more informative than the successes:
+
+| | prediction | outcome |
+|---|---|---|
+| A1 | all coefficients positive, ours largest | ✅ |
+| A2 | `|w_LFCC|` > `|w_CQCC|` | ❌ — decorrelation and strength read from *different partitions* |
+| A3 | per-fold weights stable within ±25% | ✅ ±2 / ±7 / ±8% over 300 folds |
+| B1 | `ours` excluded from the 1-SE band in 100% of splits | ✅ 0/40 |
+| B2 | `ours+2GMM` selected in 50–80% of splits | ✅ 28/40 |
+| B3 | every flip goes toward more systems | ✅ 12/12 |
+| C1 | paired CI excludes zero | ✅ — but `corr > 0.90` and the width were both wrong |
+| C2 | marginal CIs overlap heavily | ✅ 2.27 pp of overlap |
+
+Both failures came from reasoning about a quantity on the wrong footing — A2 mixed
+partitions, C1 asserted two things that cannot both be true. Neither was a measurement
+error, and neither would have been visible without writing the prediction down first.

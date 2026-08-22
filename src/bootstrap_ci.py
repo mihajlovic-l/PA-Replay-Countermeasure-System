@@ -1,6 +1,6 @@
 """Bootstrap confidence intervals for EER and min t-DCF on 2021 PA eval.
 
-    python -m src.bootstrap_ci              # the real run (B=2000, ~5 min)
+    python -m src.bootstrap_ci              # the real run (B=2000, ~55 min)
     python -m src.bootstrap_ci --quick      # B=200, for checking wiring
     python -m src.bootstrap_ci --validate   # fast path vs naive, then exit
 
@@ -44,6 +44,7 @@ import time
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from . import config, metrics, tdcf
 
@@ -64,12 +65,22 @@ COMPARISONS = [
     ("timepool_T150_aug", "T150", "post-hoc: vs parent (T150, no augmentation)"),
     ("timepool_T150_aug", "flatten_T400", "post-hoc: vs pre-registered primary"),
     ("timepool_T150_aug", "CQCC-GMM", "post-hoc: vs best official baseline"),
+    # post-hoc fusion (PROJECT_PLAN 9.8b.4 C). The claim being tested is that fusing
+    # with the two GMMs beats the single system it contains, so that is the ONLY
+    # comparison added.
+    #
+    # `fusion_ours+2GMM` vs `CQCC-GMM` is DELIBERATELY ABSENT, and this comment is the
+    # enforcement: you cannot beat a baseline by including it (9.8b.1a.1). The fusion
+    # contains CQCC-GMM, so that row would be circular, and materialising it in a
+    # results CSV is exactly how a circular number ends up quoted. Do not add it.
+    ("fusion_ours+2GMM", "timepool_T150_aug",
+     "post-hoc fusion: vs the single system it contains"),
 ]
 
 
 # --- data ----------------------------------------------------------------------
 
-def load_eval() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
+def load_eval() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str], list[str]]:
     d = pd.read_parquet(config.PA2021_LCNN_SCORES)
     if config.PA2021_CLASSICAL_SCORES.exists():
         d = d.merge(pd.read_parquet(config.PA2021_CLASSICAL_SCORES), on="filename", how="left")
@@ -96,9 +107,28 @@ def load_eval() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
             if tag in d.columns and d[tag].notna().all():
                 systems.append(tag)
 
+    # Fused systems, kept in their own file and their own registry (see
+    # config.PHASE7_FUSION_SYSTEMS). APPENDED LAST, and that is load-bearing twice
+    # over: `validate` below checks `systems[:4]`, which appending leaves untouched;
+    # and the caller excludes these from the CI-width aggregate, which backs a
+    # published claim about the 13 zero-shot systems (PROJECT_PLAN 9.8b.4).
+    fused: list[str] = []
+    if config.PA2021_FUSION_SCORES.exists():
+        fs = pd.read_parquet(config.PA2021_FUSION_SCORES)
+        for tag in config.PHASE7_FUSION_SYSTEMS:
+            col = tag.removeprefix("fusion_")      # parquet is keyed by candidate name
+            if col in fs.columns:
+                d = d.merge(fs[["filename", col]].rename(columns={col: tag}),
+                            on="filename", how="left")
+                if d[tag].notna().all():
+                    fused.append(tag)
+                else:
+                    d = d.drop(columns=[tag])      # partial coverage is not reportable
+    systems += fused
+
     y = (d["label"] == "bonafide").to_numpy().astype(np.int8)
     spk = d["speaker_id"].to_numpy()
-    return d, y, spk, systems
+    return d, y, spk, systems, fused
 
 
 # --- weighted curves (the fast path) -------------------------------------------
@@ -237,8 +267,10 @@ def main() -> None:
     args = p.parse_args()
     B = 200 if args.quick else args.replicates
 
-    d, y, spk, systems = load_eval()
-    print(f"{len(d):,} eval trials, {len(np.unique(spk))} speakers, {len(systems)} systems")
+    d, y, spk, systems, fused = load_eval()
+    print(f"{len(d):,} eval trials, {len(np.unique(spk))} speakers, {len(systems)} systems"
+          + (f" (of which {len(fused)} fused, excluded from the width aggregate)"
+             if fused else ""))
 
     if args.validate:
         sys.exit(0 if validate(d, y, spk, systems) else 1)
@@ -257,7 +289,7 @@ def main() -> None:
         tdc = {t: np.empty(B) for t in systems}
 
         t0 = time.time()
-        for b in range(B):
+        for b in tqdm(range(B), desc=scheme, unit="rep"):
             w = weights(rng)                       # ONE resample, shared by all systems
             for t in systems:
                 pm, pf = curves(preps[t], y, w)
@@ -310,15 +342,23 @@ def main() -> None:
               f"{r.eer_diff:+6.2f} pp [{r.eer_lo:+6.2f},{r.eer_hi:+6.2f}]  "
               f"corr {r['corr_eer']:.3f}  -> {v}")
 
-    widths = t.groupby("scheme")["eer_ci_width"].mean()
+    # Aggregate over the ZERO-SHOT systems only. A fused system is a different kind of
+    # object, and this mean backs the published "14.3x wider" claim about the 13 in the
+    # results table -- letting that number drift because a 14th row of another kind
+    # joined the frame is exactly the documentation drift this repo warns against.
+    agg = t[~t["system"].isin(fused)]
+    widths = agg.groupby("scheme")["eer_ci_width"].mean()
     ratio = widths["speaker-clustered"] / widths["trial-level"]
-    print(f"\nmean EER CI width: speaker-clustered {widths['speaker-clustered']:.3f} pp "
+    print(f"\nmean EER CI width over {agg['system'].nunique()} zero-shot systems: "
+          f"speaker-clustered {widths['speaker-clustered']:.3f} pp "
           f"vs trial-level {widths['trial-level']:.3f} pp — **{ratio:.1f}x wider**")
     (config.PHASE7_POSTHOC_DIR / "bootstrap_ci_summary.json").write_text(json.dumps({
         "replicates": B, "seed": args.seed, "n_speakers": int(len(np.unique(spk))),
         "mean_ci_width_speaker": float(widths["speaker-clustered"]),
         "mean_ci_width_trial": float(widths["trial-level"]),
         "width_ratio": float(ratio),
+        "aggregate_systems": int(agg["system"].nunique()),
+        "excluded_from_aggregate": fused,
     }, indent=2), encoding="utf-8")
     print(f"written to {config.PHASE7_POSTHOC_DIR}")
 

@@ -192,14 +192,16 @@ devices), not simulation parameters.
 
 **What the baseline `score.txt` files and folder names actually mean** (this was asked
 explicitly, keeping the full answer):
-- `CQCC-GMM`: Constant-Q Cepstral Coefficients (CQT-derived cepstral features) → Gaussian
-  Mixture Model classifier. Classical, pre-deep-learning baseline.
-- `LFCC-GMM`: Linear-Frequency Cepstral Coefficients (linear rather than mel/constant-Q
-  spacing) → GMM. Another classical baseline.
-- `LFCC-LCNN`: same LFCC features, but fed into a Light CNN (deep learning) instead of a
-  GMM — shows the classical→deep jump on identical features.
-- `RawNet2`: end-to-end deep network consuming raw waveform directly, no hand-crafted
-  features — the most modern of the four.
+| | front-end | back-end |
+|---|---|---|
+| **B01 CQCC-GMM** | **CQCC** — Constant-Q Cepstral Coefficients: take the CQT, log it, then DCT to decorrelate into cepstral coefficients (+ deltas) | **GMM**, generative — one Gaussian mixture fitted to bonafide frames, one to spoof; score is the log-likelihood ratio. Frame-level, no temporal modelling |
+| **B02 LFCC-GMM** | **LFCC** — like MFCC but with *linearly*-spaced filters instead of mel. Keeps the high-frequency resolution mel compresses away, which is exactly why it beats MFCC on replay | GMM, as above |
+| **B03 LFCC-LCNN** | LFCC | **LCNN-LSTM** — Light CNN plus a recurrent stage. *Not* a plain LCNN; see 9.4 for what that costs the front-end comparison |
+| **B04 RawNet2** | **none** — raw waveform, sinc-filter front-end learned end to end | deep residual net + GRU |
+
+The two GMM baselines are classical and pre-deep-learning; B03 shows the classical→deep
+jump on *identical* features; B04 is the most modern of the four. Which of them are worth
+rebuilding in-house, and why the cheapest one is not the most useful one, is 9.8c.
 - Each `score.txt` is one row per file: `FILENAME SCORE` (a continuous score, higher
   usually meaning more bonafide-like, sign/scale conventions differ slightly per system
   — check when computing EER against them).
@@ -953,11 +955,22 @@ Protocol from here:
 - **Develop against the `progress` partition** (87,048 trials). Phase 7 showed it
   tracks `eval` closely for every system (PROGRESS_REPORT 7.17), so it is a good
   out-of-domain development surrogate.
-- **Touch `eval` once more at most**, for a single final confirmation of whatever is
-  chosen.
+- **Touch `eval` at most once per declared experiment**, for a single final confirmation
+  of whatever that experiment chose.
 - **Report post-hoc work in a section clearly separated from the pre-registered
   results.** The Phase 7 table stands as the clean estimate; anything later is
   exploratory and must be labelled as such.
+
+**There is deliberately NO fixed budget of remaining eval applications.** A cap was
+considered and rejected: pre-committing to "two more" would mean that if the first two
+experiments produced nothing worth reporting and the third did, the third could not be
+confirmed — the cap would be binding on the basis of results it was set before seeing,
+which is arbitrary rather than principled. What disciplines eval use is not a quota but
+the **per-experiment rule above**, which is unaffected by how many experiments there
+eventually are: each one fixes its candidates, decision rule and predictions in this
+document first, selects on `progress`, and confirms once. An experiment that has not
+declared a protocol does not get to touch `eval` at all, and that is the constraint doing
+the actual work.
 
 ### 9.1 Push the augmentation axis further — highest expected value
 
@@ -966,13 +979,43 @@ plateaued**: 0 → 1 → 3 copies gives 39.747 → 34.006 → 32.665% EER, still
 the `hidden` partition the gap is starker still: augmented systems hold ~30% while every
 non-augmented one collapses to 48–54%.
 
-Try 5–7 copies, and/or more aggressive perturbation chains. Cost ~1.3 h per copy to
-generate plus one training run each (~7–11 h). If regenerating the copies anyway, fix
-the latent seed collision noted in 6.10 (multiplier `1_000_000`).
+**Corrected framing — the dose is the CLEAN FRACTION, not the copy count.** The Dataset
+draws uniformly among `{clean, aug1..N}` per access (6.9), so N copies gives a clean
+fraction of `1/(N+1)`, and the axis actually measured was 100% → 50% → 25%. Copy count
+therefore moves the dose **hyperbolically**, and the increments are shrinking fast:
 
-*Why it might not pay*: the curve must flatten eventually, and every copy costs ~4.6 GB
-plus a training run. The in-domain cost also grows monotonically, so dev EER will keep
-looking worse — which by now is expected rather than alarming.
+| copies | clean | 2021 EER | marginal |
+|---|---|---|---|
+| 0 | 100% | 39.747 | — |
+| 1 | 50% | 34.006 | **−5.74** |
+| 3 | 25% | 32.665 | **−1.34** |
+| 5 | 16.7% | ? | |
+| 7 | 12.5% | ? | |
+
+Going 3 → 7 copies shifts the clean fraction only 25% → 12.5%, a **smaller step than
+1 → 3**, which itself bought 1.34 pp. So "try 5–7 copies" spends ~5 h of generation and
+~18 GB of disk to move the axis less than the previous step moved it.
+
+**The cheap experiment does the same thing for free.** Keep the three existing copies and
+change the *sampling weight* on clean: `p(clean) = 0.125` reproduces the dose of seven
+copies with no generation and no disk — a one-line Dataset change.
+
+That also separates two factors currently confounded. **Copy count buys perturbation
+diversity; clean probability buys dose.** The 2-factor design follows, and it is ordered
+so the free axis reports first:
+
+- **Dose (free):** 3 copies, `p(clean) ∈ {0.25, 0.167, 0.125, 0.0625}` — 4 training runs.
+- **Diversity (costly):** only if the dose axis is still moving — more copies at a
+  matched clean fraction, which is the only way to attribute a further gain to diversity
+  rather than dose.
+
+**Decided: run the dose axis first.** If regenerating copies later, fix the latent seed
+collision noted in 6.10 (multiplier `1_000_000`).
+
+*Why it might not pay*: the curve must flatten eventually, and the −1.34 pp step is
+already close to P1's ±0.5–1.0 pp checkpoint-noise floor. The in-domain cost also grows
+monotonically, so dev EER will keep looking worse — which by now is expected rather than
+alarming.
 
 ### 9.2 Extend T downward
 
@@ -1102,12 +1145,19 @@ room-triples the paper defines in its footnote 7 split cleanly into group means 
 
 ### 9.5b Follow-ups created by the paper analysis (new)
 
-- **Train on VAD-trimmed audio.** PROGRESS_REPORT 7.19 shows our non-augmented models
-  lose 11.5–16.7 pp when non-speech is removed, versus 0.3–6.9 pp for the official
-  baselines — they lean on non-speech much harder than the published systems do, which
-  the paper (§VI) explicitly flags as an undesirable database cue. Training on trimmed
-  audio would test whether the dependence can be removed without costing in-domain
-  accuracy. Directly addresses a stated limitation of the field.
+- **Train on VAD-trimmed audio** — *motivation partly overtaken by P4; DEFERRED, not
+  dismissed.* PROGRESS_REPORT 7.19 shows our non-augmented models lose 11.5–16.7 pp when
+  non-speech is removed, versus 0.3–6.9 pp for the official baselines — they lean on
+  non-speech much harder than the published systems do, which the paper (§VI) explicitly
+  flags as an undesirable database cue.
+
+  **P4 then largely closed this by accident.** `timepool_T150_aug` does not degrade on
+  trimmed audio at all — 27.87 → **26.87**, it *improves* — so the defect this item was
+  written to fix is no longer present in the system that would be fixed. What remains is
+  a genuine but weaker question: whether *training* on trimmed audio removes the residual
+  dependence in the non-augmented models, and whether it beats augmentation at doing so.
+  Still addresses a stated limitation of the field, so it stays on the list; it is simply
+  no longer repairing anything in the current best system.
 - **Investigate the attacker-room grouping.** Why is room group 2 (`r4,r5,r6`) ~15 pp
   easier than group 1? Nothing in the published analysis explains it, because rooms
   were excluded there after a size correlation came back null.
@@ -1278,9 +1328,52 @@ Measured on `progress`, per-file, against `timepool_T150_aug`:
 | LFCC-LCNN | 0.244 | 46.9% | 57.8% | 0.81 |
 | RawNet2 | 0.117 | 48.6% | 54.0% | 0.90 |
 
-"Rescue" is the share of *our* errors that the partner gets right; the independence
-reference is the partner's own accuracy `1 − EER_B`, **not** 50%. A ratio near 1.0 means
-the partner's errors are statistically independent of ours.
+**Reading the two columns**, because both were initially got wrong:
+
+*Spearman ρ* is Pearson correlation computed on **ranks** rather than raw values: replace
+every score by its position in sorted order, then correlate the positions. Rank
+correlation rather than Pearson for two reasons, and both are specific to this table.
+The scales are wildly incommensurable — our LCNN emits logits spanning ±40, the GMMs emit
+log-likelihood ratios spanning ±5, MFCC-RF emits probabilities in [0.04, 0.93] with only
+236 distinct values — so Pearson would report differences in distribution *shape*. And
+**EER is itself rank-based**: it is read off the ROC curve, which depends only on the
+ordering of scores and never on their magnitudes. Rank correlation therefore asks exactly
+the question the metric cares about — do these two systems order the files the same way?
+
+*Rescue* is the share of the files **we** get wrong (at our EER threshold) that the
+partner gets right (at its own). Its reference point is the subtle part: an earlier draft
+used **50%**, which is wrong and inverted several readings. If B's correctness were
+statistically independent of whether A erred, rescue would equal B's own accuracy —
+exactly `1 − EER_B`, since at the EER threshold FRR = FAR = EER and so the overall error
+rate is EER regardless of class imbalance. Hence the `ratio` column: **≈1.0 means the
+partner's errors are independent of ours** (the ideal), below 1.0 means the two tend to
+fail on the same files.
+
+**Why each row reads as it does.** Our own `flatten_T400_aug` is redundant on *both*
+measures — same architecture, same training data, same front-end, so it agrees on ranking
+*and* fails where we fail, far more than chance. **CQCC-GMM is middling for a mechanical
+reason that matters below: CQCC is a cepstral summary of the constant-Q spectrogram — the
+same analysis our own front-end uses.** Shared front-end family, shared errors. LFCC-GMM
+is the standout precisely because it shares nothing: a linear filterbank rather than
+constant-Q, and a generative back-end rather than a discriminative one. RawNet2 is the
+"necessary but not sufficient" case in a single row — decorrelated (ρ 0.117) but at 46%
+EER too weak to contribute.
+
+**Measured single-partner gains on `progress`**, which is where the parsimony argument
+comes from:
+
+| fused with | gain |
+|---|---|
+| LFCC-GMM alone | **−2.04 pp** |
+| CQCC-GMM alone | −1.69 pp |
+| both GMMs | **−2.82 pp** |
+| all four baselines | −2.92 pp |
+
+**The worst system in the table is the best single partner.** LFCC-GMM at 39.8% EER
+outperforms CQCC-GMM at 36.3% as a fusion partner, which is the cleanest available
+demonstration that *partner difference matters more than partner quality*. The two GMMs
+together capture **97%** of the total available gain; the remaining two baselines buy
+0.10 pp between them.
 
 **LFCC-GMM is the best partner despite being the worst system in the table (39.8% EER)**
 — decorrelation matters more than partner quality, though not without limit: RawNet2 is
@@ -1310,6 +1403,271 @@ Cheap to test (no GPU, no retraining), and it must be developed on `progress` wi
 most one confirmation on `eval` (§9.0). Two honest caveats: what gets reported is then a
 *fusion*, not a CQT-LCNN, which changes the thesis's claim; and it inherits the
 training-data non-compliance noted in PROGRESS_REPORT 7.14.
+
+#### 9.8b.4 Three follow-ups on the completed fusion run — declared before running
+
+§9.8b.1 was executed and all three of its predictions held (results in PROGRESS_REPORT
+P5). Reviewing that run against this protocol exposed three gaps. Each is closed below,
+and the protocol for closing them is fixed **here, before the numbers exist**, for the
+reason §9.3.1 and §9.8b.1 already earned.
+
+**The boundary first, because it governs all three.** Every one of these is in the
+post-hoc lane and **none of them touches `eval` as a decision**. A and B are computed on
+`progress` alone. C recomputes confidence intervals over eval scores that are *already on
+disk and already spent*, and selects nothing. The single eval application of §9.8b.1
+stands as the only one, and is not repeated.
+
+**A. The fitted weights were computed and discarded.** `fuse.py` fits the logistic
+regression and returns only `decision_function`, so the coefficients exist nowhere.
+§9.8b.1a names *"direct evidence of complementarity between CQT-LCNN and cepstral-GMM
+front-ends"* as one of three things fusion contributes **without** damaging the thesis —
+and the coefficients **are** that evidence. Because the inputs are z-normed to unit
+variance, the coefficients are directly comparable across systems; that property is what
+makes them an argument rather than a decoration. Captured for every trained candidate in
+CV, not only the selected one, since watching CQCC-GMM's weight change as LFCC-LCNN is
+added measures redundancy *among the baselines*, which nothing else here does.
+
+Recoverable with **zero eval contact**: the eval refit's `mu`, `sd` and coefficients all
+come from `progress`, and eval enters only at `decision_function`. A `--weights-only`
+path therefore reproduces the weights behind the reported number without re-running
+`--confirm-eval`.
+
+*Predictions.* (1) All three coefficients positive, `timepool_T150_aug` largest.
+(2) **`|w_LFCC-GMM|` > `|w_CQCC-GMM|` despite LFCC-GMM being the worse system** (39.54%
+vs 38.07% EER) — because §9.8b.2 measured it as far more decorrelated (ρ 0.101 vs 0.284).
+This is a direct falsifiable test of the *gain ≈ decorrelation × strength* model the whole
+experiment rests on. (3) Per-fold coefficients stable across the five speaker-disjoint
+folds, partner weights within ~±25% of their mean.
+
+A negative partner weight would mean the fusion is using that system *contrarily* and
+would require the complementarity story to be rewritten. It must therefore be visible in
+the artifact, not smoothed over.
+
+**B. The selection margin is uncharacterised.** `ours+2GMM` cleared the 1-SE threshold by
+**0.162 pp** at one fold split. Swept over 20 seeds × K ∈ {5, 10} — K is included because
+§9.8b.1 declared "speaker-disjoint K-fold" *without fixing K*, so `N_FOLDS = 5` was an
+implementation choice, and K is the parameter the 1-SE band is most sensitive to
+(SE ~ 1/√K). **Leave-one-speaker-out is not viable**, and the reason is structural rather
+than budgetary: a single speaker's ~1.3k trials give a degenerate per-fold EER, and 19 of
+the 67 speakers carry no spoof trials at all.
+
+*Predictions.* (1) `ours` excluded in **100%** of splits — it misses by 2.37 pp against
+SE ~0.6, so the fusion-vs-no-fusion half of the decision is not marginal at all.
+(2) `ours+2GMM` selected in a majority but **not all** splits; 50–80%. (3) Every flip goes
+toward *more* systems, never toward `ours`.
+
+*This is evidence about the robustness of a decision already made; it is **not** a licence
+to re-select.* If most splits would have chosen `ours+4base`, that is reported as a
+limitation on the existing result. Eval is not re-applied.
+
+**C. The result carries no confidence interval**, while every other headline in this
+project does. P3 established the standard: speaker-clustered paired bootstrap, and that
+comparing marginal CIs is systematically conservative — the CI of the *difference* is the
+test. One comparison is added, `fusion_ours+2GMM` vs `timepool_T150_aug`.
+
+**`fusion_ours+2GMM` vs `CQCC-GMM` is deliberately NOT added, and the refusal is enforced
+in code with its reason.** §9.8b.1a point 1: you cannot beat a baseline by including it.
+Materialising that row in a results CSV would create exactly the incoherent comparison
+this protocol forbids, and a boundary written into the data path holds where one written
+in a document depends on whoever reads it next.
+
+*Predictions.* (1) The paired CI **excludes zero**, even though −2.27 pp is *smaller* than
+the −1.62 pp that came back "not distinguishable" in P4 — because the fused score
+*contains* the single system, so the pair correlates far above P4's 0.19–0.82 range.
+Predicted `corr_eer` **> 0.90**, CI approximately **[−3.2, −1.4]**. (2) The marginal CIs
+overlap heavily, reproducing P3's central point.
+
+**Three controls, fixed in advance.** A: recovered weights applied to eval *features*
+already on disk must reproduce the stored fused scores to float tolerance — no labels, no
+EER, no decision. B: seed 42 at K=5 must reproduce `fusion_cv_progress.csv` exactly.
+C: **all 13 existing systems and all 13 existing comparisons must reproduce bit-for-bit.**
+C's control is load-bearing and should hold by construction — the resample `w` is drawn
+once per replicate *before* the system loop and the loop never consumes the rng, so a 14th
+system cannot perturb the weight sequence. If any existing row moves, the change is wrong
+and is reverted.
+
+**Two reporting decisions, settled here.** The fusion is **excluded from the CI-width
+aggregate** in `bootstrap_ci_summary.json`: that statistic backs the published "14.3x
+wider" claim about the 13 zero-shot systems, and letting it drift because a
+differently-shaped object joined the table is the documentation drift this repo warns
+against. And the fusion **stays out of `posthoc_table_2021.csv`** — tabulating a
+non-zero-shot system beside zero-shot ones is the conflation §9.8b.1a point 4 calls the
+most serious methodological error available here. Its canonical record is
+`fusion_eval.json`, which already carries `zero_shot: false`.
+
+### 9.8c Build our own cepstral-GMM partners — the only route that keeps every claim
+
+§9.8b.1a lists four things fusing with the official baselines costs. Building the partners
+in-house recovers **three** of them: the "beats every official baseline" claim stops being
+circular, the system becomes ours end to end, and fusion turns into a *direct test of the
+front-end premise* rather than a combination that happens to work.
+
+**And it is the only route that can recover the fourth, which is the deepest.** The fused
+§9.8b system is not zero-shot: its weights were fitted on 87,048 labelled 2021 trials.
+That cannot be fixed with the official baselines, because their score files exist **only
+for 2021** — there is nowhere else to fit. Our own GMMs can be scored on **2019 dev**, so
+the fusion weights can be fitted there and the whole system never sees a 2021 label. The
+claim stays *"a countermeasure trained purely on simulated replay transfers to real
+replay"*, with fusion inside it rather than beside it.
+
+Whether dev-fitted weights transfer is a genuine risk and must be declared as a
+prediction, not assumed. The relevant precedent is P1: dev EER is anti-correlated with
+2021 performance at the **configuration** level but sound at the **epoch** level. Fitting
+three weights is far closer to the epoch case than the configuration case, so the prior is
+favourable — but Phase 7's central lesson is that this is exactly the intuition that
+failed before. Fit on `progress` as well, report both, and let the gap between them
+*measure* how much labelled target-domain data is worth.
+
+#### The cost ordering and the value ordering are INVERTED
+
+This is the decision's crux and it reverses the obvious plan.
+
+| | cost | why that cost | ρ with ours | ratio |
+|---|---|---|---|---|
+| CQCC-GMM | **~3–5 h** | derivable from the cached CQT — no audio re-decoded | 0.284 | 0.82 |
+| LFCC-GMM | ~6–8 h | needs fresh extraction from waveform: ~1 h for 2019, ~2.5 h for 2021's 943,110 files, plus GMM fitting over ~79 M frames (subsampling required) | **0.101** | **0.98** |
+
+**CQCC is cheap *because* it is redundant.** It reuses our CQT cache — and 9.8b.2 already
+identified shared constant-Q analysis as the mechanism behind CQCC-GMM's mediocre ratio of
+0.82. The official CQCC-GMM at least used an independent CQT implementation; ours would
+read *the same cached array our LCNN reads*, so its decorrelation from our system should
+be **worse than 0.284, not equal to it**. LFCC is expensive because it is a genuinely
+different front-end, which is the same fact that makes it the ratio-0.98 partner.
+
+So the project's usual cheapest-first ordering is here also **weakest-first**, and the
+usual justification for it does not hold: an early interrupt after CQCC would leave us
+with the partner least able to demonstrate anything.
+
+#### What we could actually build is not CQCC, and must not be called CQCC
+
+The cached CQT is **uint8-quantised dB, `top_db`-clipped, and peak-normalised per file**
+(`ref=np.max`, `features.extract_cqt_uint8`). Three consequences, all of which belong in
+the write-up rather than in a footnote:
+
+1. Real CQCC's defining step is **resampling the geometrically-spaced CQT bins onto a
+   uniform scale** before the DCT. Our cache has no such resampling, so what we would
+   build is *log-CQT + DCT* — a constant-Q cepstral feature of our own design.
+2. **C0 carries no absolute level**, since each file is normalised to its own peak.
+3. Quantisation is ~0.31 dB per step over the `top_db` range, and everything below the
+   floor is already gone.
+
+None of that is disqualifying — it is a legitimate feature, and 6.8's finding that CMVN
+destroys the evidence does *not* transfer to peak normalisation, which removes one scalar
+per file rather than per-bin statistics over time. But calling it "CQCC" would be false,
+and a home-built LFCC-GMM will likewise not reproduce the official one: implementation
+details differ, so its fusion contribution may differ from the −2.04 pp measured in 9.8b.2.
+**We would be building complementary systems, not reproducing those two.**
+
+#### Settled
+
+**Build both, LFCC-GMM first**, and fit the fusion weights on **both `dev` and
+`progress`**, reporting the two side by side.
+
+Both rather than one, for two reasons that are not the 0.78 pp. The 1-SE selection needs
+the full candidate set — building only LFCC would prejudge the choice the declared rule
+exists to make — and the 28/40 result from 9.8b.4 B is evidence about the **official**
+partners, which does not transfer: the in-house CQCC's expected redundancy is *higher*,
+so an in-house `ours+2GMM` may not reproduce that margin.
+
+And CQCC earns its 3–5 h as a **falsifiable test of the front-end-family mechanism**
+rather than as a marginal gain. 9.8b.2 asserts the official CQCC-GMM is a mediocre partner
+*because* it shares constant-Q analysis with us. An in-house version reading the identical
+cache should land at ρ well above 0.284; if it does, the mechanism is confirmed, and if it
+lands at 0.284 anyway the explanation is wrong. That is worth more than the incremental
+gain, which at **−0.78 pp** sits below P1's ±0.5–1.0 pp checkpoint-noise floor and may not
+be separately demonstrable even if real.
+
+Fitting on both partitions is not hedging: the dev fit is the *zero-shot* system and the
+`progress` fit is the stronger one, and **the gap between them is the measurement** — it
+prices what 87,048 labelled target-domain trials are actually worth. Reporting only one
+would discard that.
+
+#### 9.8c.1 Declared protocol — fixed before anything was built
+
+**The two systems.** Both are 512-component **diagonal-covariance GMMs, one per class**,
+scored as the log-likelihood ratio averaged over frames, trained on the **enriched
+resplit** (matching our LCNN, and inheriting the training-data non-compliance already
+disclosed in 7.14 — all fused components share it).
+
+| tag | front-end |
+|---|---|
+| `our-LFCC-GMM` | LFCC, standard ASVspoof recipe: 70 linear-spaced filters, 20 coefficients + Δ + ΔΔ = **60 dims**, 20 ms window / 10 ms hop |
+| `our-CQT-DCT-GMM` | dequantised cached log-CQT → DCT → 20 coefficients + Δ + ΔΔ. **Named for what it is.** It is *not* CQCC: no uniform-scale resampling of the geometric bins, C0 carries no absolute level (peak-normalised cache), 0.31 dB quantisation |
+
+**Fitting: exact EM with a chunked E-step, not sklearn.** `GaussianMixture` materialises
+2–3 `(n_frames × n_components)` float64 arrays — 500 k frames × 512 components is
+**2.05 GB each**, so 4–6 GB live, which does not fit in 5.9 GB. Diagonal-covariance EM
+decomposes into additive sufficient statistics (`N_k`, `Σ r·x`, `Σ r·x²`) that accumulate
+over chunks, bounding memory at `chunk × components` ≈ **41 MB**. This is **exact batch
+EM computed in pieces, not minibatch or online EM** — the same fixed point, so it costs
+nothing statistically. Frame count therefore becomes a *runtime* decision, not a memory
+one.
+
+**Frame sampling: equal frames per file, within a class.** A GMM scores a file by the
+**mean** frame log-likelihood, so every file counts once at test time; pooled random
+sampling would instead weight the fit by duration. That matters here specifically because
+duration is **not class-neutral** — 6.10 measured bonafide at 323 frames against spoof at
+274 in train, and duration alone scores 41.5% EER. Across classes there is no shared fit,
+so the quota is set *per class* to reach ~1.5–2 M frames each (≈90 frames/file bonafide,
+≈10 spoof at the ~1:9 split), giving both GMMs ~3–4 k frames per component.
+
+**Candidates** (fixed here; not chosen from results):
+
+| name | systems |
+|---|---|
+| `ours` | `timepool_T150_aug` alone — the reference |
+| `ours+LFCC` | + `our-LFCC-GMM` |
+| `ours+CQTDCT` | + `our-CQT-DCT-GMM` |
+| `ours+2GMM-inhouse` | + both |
+
+**Two fit arms, run identically:** weights fitted on **2019 `dev`** (the system is then
+fully zero-shot w.r.t. 2021) and on **2021 `progress`** (not zero-shot, directly
+comparable to 9.8b). Selection is the same **1-SE rule** as 9.8b.1 — lowest CV EER, then
+fewest systems among those within 1 SE — run *independently per arm* on speaker-disjoint
+5-fold CV **of that arm's own fitting partition**. Equal-weight fusion reported alongside
+as the same control.
+
+**Confirmation. This experiment spends TWO eval applications**, one per arm, declared
+here rather than discovered later — the comparison *between* the arms is the result, so a
+single arm would not answer the question. If the two arms select different candidates, the
+matched pair (the progress-selected candidate under both fits) is reported as well, so
+fit-partition is never confounded with candidate choice.
+
+**Predictions, stated in advance:**
+
+1. **`our-CQT-DCT-GMM` correlates with `timepool_T150_aug` at ρ > 0.284**, the official
+   CQCC-GMM's value. This is the experiment's real prize: 9.8b.2 explains CQCC-GMM's
+   mediocre partnership by *shared constant-Q analysis*, and ours reads the identical
+   cached array, so it should be strictly more redundant. If it lands at 0.284 anyway,
+   that explanation is wrong.
+2. **`our-LFCC-GMM` is the better single partner** — lower ρ, larger fitted weight, larger
+   solo fusion gain than `our-CQT-DCT-GMM`. (Note A2's failure mode: strength must be read
+   on the *fitting* partition, not on eval.)
+3. **The 1-SE rule selects `ours+LFCC` — two systems — on at least one arm**, unlike
+   9.8b's three, because the in-house CQT-DCT partner's marginal contribution should fall
+   inside 1 SE once its redundancy is higher.
+4. **The dev-fitted fusion beats the single system on eval but loses to the
+   progress-fitted one.** The gap between them is the price of 87,048 labelled
+   target-domain trials. Risk acknowledged: P1 found dev sound at the *epoch* level but
+   Phase 7 found it anti-correlated at the *configuration* level; fitting 3–4 weights is
+   nearer the former, but this is exactly the intuition that failed before.
+5. Both in-house GMMs are **individually worse on 2021 than their official counterparts**
+   (different implementations, no tuning), while the in-house fusion gain lands within
+   ~1 pp of the −2.30 pp measured in P5c.
+
+**Controls, fixed in advance.** (a) The chunked EM must reproduce sklearn's
+`GaussianMixture` to numerical tolerance on a subset small enough for sklearn to fit
+(50 k frames, 32 components) — the optimisation is worthless if it is not the same
+algorithm. (b) Streaming per-file LLRs must match a batch computation exactly on a held
+subset. (c) Every training file contributes exactly its class quota of frames. (d) Every
+new module reports progress continuously and is resumable at fine granularity.
+
+**Estimated cost** ~6–8 h total, ordered **LFCC first** so an interrupt leaves the better
+partner finished: LFCC extraction + quota sampling ~1 h, LFCC GMM fits ~0.5–1 h, LFCC
+streaming score over 2019 dev + 943,110 2021 files ~2.5–3 h, then CQT-DCT end to end
+~1.5–2.5 h (no audio decoded — it reads the existing CQT cache), fusion minutes. Disk:
+~1–2 GB of sampled training frames; **no frame-level store for 2021**, which would be
+~79 GB.
 
 ### 9.8 Score fusion — measured among our own systems, and it does not pay
 

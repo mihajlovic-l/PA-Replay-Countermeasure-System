@@ -302,6 +302,25 @@ PHASE7_POSTHOC_SYSTEMS = {
     "flatten_T150_aug":  ("progress", "hidden"),           # not selected
 }
 
+# --- FUSED systems (post-hoc, and NOT zero-shot) --------------------------------
+# A third registry, because a fusion is a third kind of object and the two properties
+# that separate it are the two easiest to lose track of:
+#
+#   1. It is NOT ZERO-SHOT. Every system in the two dicts above saw only 2019 data;
+#      this one's weights were fitted on 87,048 labelled 2021 `progress` trials. The
+#      claim changes from "a countermeasure trained purely on simulated replay
+#      transfers to real replay" to "with labelled target-domain data, performance
+#      improves by X" -- different scientific statements (PROJECT_PLAN 9.8b.1a.4).
+#   2. It CONTAINS systems we did not build, so it cannot be compared against the
+#      official baselines: you cannot beat a baseline by including it (9.8b.1a.1).
+#
+# Kept out of PHASE7_POSTHOC_SYSTEMS rather than merged into it for a practical reason
+# too: score_posthoc.py iterates that registry to run LCNN forward passes, and a fusion
+# has no checkpoint to load.
+PHASE7_FUSION_SYSTEMS = {
+    "fusion_ours+2GMM": ("eval",),
+}
+
 # Which partitions to extract. The HEADLINE number is PA2021_REPORTED_PARTITION
 # ("eval", 721,332 rows) exactly as pre-registered; `progress` and `hidden` are
 # extracted in the same pass (+~30% runtime) purely as a free consistency check,
@@ -351,6 +370,9 @@ PA2021_CLASSICAL_SCORES = PA2021_WORK_DIR / "classical_scores.parquet"
 # Post-hoc system scores, kept in their own file so the pre-registered score table
 # cannot be silently widened -- see PHASE7_POSTHOC_SYSTEMS above.
 PA2021_POSTHOC_SCORES = PA2021_WORK_DIR / "posthoc_scores.parquet"
+# Fused scores from the single eval application of PROJECT_PLAN 9.8b.1. A THIRD file
+# for a third kind of object -- see PHASE7_FUSION_SYSTEMS.
+PA2021_FUSION_SCORES = PA2021_WORK_DIR / "fusion_eval_scores.parquet"
 PA2021_FAILURES_CSV = PA2021_WORK_DIR / "extraction_failures.csv"
 
 # The 2021 pooled MFCC table IS cached (~500MB for all partitions), unlike the
