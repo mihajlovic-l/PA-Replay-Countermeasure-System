@@ -2337,3 +2337,138 @@ the same fitted log-likelihood.
 
 Artifacts: `E:\ASVspoof\gmm\` — sampled frames + sidecars, four `*_gmm.npz`, and four
 score tables. Next: §9.8c.1 fusion, under the two normalisation arms §9.8c.2 declares.
+
+### P7 — A zero-shot, all-ours fusion that matches the borrowed one
+
+The culmination of §9.8c. Both arms were applied to eval **once each**, as §9.8c.1
+declared, and the confidence intervals were declared in §9.8c.3 *before* the run — which
+mattered, because they overturned the framing this section was going to carry.
+
+| system | EER | min t-DCF | composition | zero-shot |
+|---|---|---|---|---|
+| in-house **progress** arm `ours+LFCC` | **28.144** | **0.7417** | 2, all ours | no |
+| in-house **dev** arm `ours+LFCC` | **28.660** | **0.7602** | 2, all ours | **YES** |
+| §9.8b fusion `ours+2GMM` | 28.807 | 0.7725 | 3, 2 borrowed | no |
+| `timepool_T150_aug` (single) | 31.081 | 0.8090 | 1, ours | yes |
+| CQCC-GMM (best official baseline) | 38.068 | 0.9434 | 1, theirs | yes |
+
+Gap closed from no-countermeasure (t-DCF 1.0) to perfect (the 0.1291 ASV floor):
+**29.7%** progress arm, **27.5%** zero-shot, against 26.1% for the borrowed-partner
+fusion, 21.9% for the single system and 6.5% for CQCC-GMM.
+
+#### P7a — The five declared intervals, and the one that changed the headline
+
+Speaker-clustered paired bootstrap, B = 2000:
+
+| # | comparison | EER diff | 95% CI | sign | verdict |
+|---|---|---|---|---|---|
+| 1 | zero-shot fusion vs single | −2.393 | [−4.518, **−0.243**] | 98.4% | significant |
+| 2 | label-fitted fusion vs single | −2.949 | [−4.488, −1.441] | **100%** | significant |
+| 3 | price of target labels | +0.556 | [−0.110, +1.241] | 94.2% | **not distinguishable** |
+| 4 | in-house vs borrowed-partner fusion | −0.090 | [−1.695, +1.459] | **53.1%** | **not distinguishable** |
+| 5 | in-house vs CQCC-GMM | −9.327 | [−13.004, −5.696] | **100%** | significant |
+
+**Comparison 4 is why §9.8c.3 was written before this section.** The point estimates
+favoured the in-house fusion over the borrowed-partner one by 0.147 pp, and that is
+exactly the kind of gap this project has repeatedly shown to be noise. Paired, it is
+**−0.090 pp with 53.1% sign consistency** — a coin flip, null on both metrics. Writing
+"beats the official fusion" first and measuring afterwards would have required a
+retraction. The supportable claim is **equivalence**, and it is the better claim anyway:
+*the 0.147 pp was never the point; matching that fusion without borrowing a single system
+and without reading a single 2021 label is.*
+
+**Comparison 5 is what the whole of §9.8c existed to make possible.** §9.8b.1a.1 forbids
+comparing a fusion against a baseline it contains. This fusion contains no borrowed
+system, so the comparison is **legitimate rather than merely disclosed** — the
+circularity is gone, not managed. At −9.327 pp with 100% sign consistency and t-DCF
+−0.1795 [−0.2394, −0.1151], it restores the Phase 7 headline for a *fused* system.
+
+#### P7b — Prediction 3 split, and t-DCF is the metric that counts
+
+EER calls the price of 87,048 labelled target-domain trials **not distinguishable**
+(+0.556 [−0.110, +1.241]), as predicted. **min t-DCF does not**: +0.0185
+[**+0.0041**, +0.0332], excluding zero.
+
+This is precisely the disagreement P2 warned about — *"EER and t-DCF disagree on two
+orderings, and t-DCF is the metric that counts"* — now appearing on a **significance
+verdict**, on the metric ASVspoof made primary for PA. It is resolvable at all only
+because the two arms are near-identical systems (corr **0.961**), so the pairing cancels
+almost everything and a 0.0185 difference survives.
+
+So the defensible statement is **not** "labelled target data buys nothing". It is:
+**labels buy about half a point of EER, indistinguishable from zero, and a small but
+real improvement in the cost-weighted operating region.** Reporting the EER null alone
+would have overstated the zero-shot result on the metric that matters most.
+
+#### P7c — The zero-shot arm is the most valuable result and the least secure
+
+Comparison 1 clears zero by **0.243 pp** — the narrowest margin of any significant claim
+in this project:
+
+| comparison | margin to zero |
+|---|---|
+| **zero-shot fusion vs single (P7)** | **0.243** |
+| head: flatten vs timepool @T400 (P3) | 0.61 |
+| §9.8b fusion vs single (P5c) | 0.78 |
+| pred 1: T250 vs T400 (P3) | 1.03 |
+| label-fitted fusion vs single (P7) | 1.441 |
+
+**And there is a mechanism, which connects to the fitted weights.** The zero-shot arm
+weights its two systems [3.62, 4.01] — the LFCC-GMM slightly *outranking* our primary,
+which is reasonable on dev where the two are comparable (11.1% vs 8.9% EER) but wrong for
+2021 (35.3% vs 29.4%). The label-fitted arm gets the ordering right at [1.12, 0.76].
+Because the mis-weighted arm behaves *less* like the single system across speaker
+resamples (**corr 0.593 against 0.785**), less cancels in the pairing and its interval is
+wider. **The mis-weighting is not a curiosity — it is exactly what makes the zero-shot
+claim statistically weaker.**
+
+That is a genuine trade-off and belongs in the write-up rather than smoothed away: the
+zero-shot arm preserves every claim §9.8b broke, on a 0.243 pp margin; the label-fitted
+arm is secure at 1.441 pp but forfeits the zero-shot property. Both should be reported.
+
+#### P7d — The scorecard across §9.8c, and three caveats that travel with the headline
+
+Eleven predictions were declared before their numbers existed. **Nine held, one was
+refuted, one split.**
+
+| | prediction | outcome |
+|---|---|---|
+| 9.8c.1 P1 | in-house CQT-DCT more redundant than official CQCC (ρ > 0.284) | ✅ 0.674 |
+| 9.8c.1 P2 | LFCC the better partner | ✅ |
+| 9.8c.1 P3 | 1-SE rule selects two systems, not §9.8b's three | ✅ all four arm×norm |
+| 9.8c.1 P4 | dev arm beats single, loses to progress arm | ✅ both halves |
+| 9.8c.1 P5 | in-house GMMs worse than official counterparts | ❌ better — 3.3x the training data |
+| 9.8c.2 | apply-norm beats fit-norm on the dev arm | ✅ −2.425 pp |
+| 9.8c.3 C1 | zero-shot gain excludes zero | ✅ (just) |
+| 9.8c.3 C2 | label-fitted gain excludes zero, wider | ✅ |
+| 9.8c.3 C3 | price of labels not distinguishable | ⚠️ EER yes, **t-DCF no** |
+| 9.8c.3 C4 | in-house ≈ borrowed-partner fusion | ✅ 53.1% sign |
+| 9.8c.3 C5 | in-house beats CQCC-GMM, non-circularly | ✅ −9.3 pp |
+
+**Three caveats that must travel with every quotation of this result:**
+
+1. **Zero-shot means no target LABELS, not no target data.** `apply-norm` reads unlabelled
+   eval scores to standardise, which makes the system **transductive** — it needs a batch
+   of target data at inference. Declared in §9.8c.2; overstating it would be the most
+   attackable thing in the chapter.
+2. **The training-data non-compliance (7.14) is inherited by every component.** Our GMMs
+   beat the official ones (P6b) because they see 3.3x the data, not because the method is
+   better. This is why the in-house fusion beating CQCC-GMM must be reported alongside
+   that disclosure, not instead of it.
+3. **The zero-shot margin is 0.243 pp.** Report as "small but consistent" — P3's language
+   for exactly this situation — never asserted flatly.
+
+**Headline, as the data supports it:** a two-system fusion, both components ours, fitted
+without a single 2021 label — **28.66% EER / 0.7602 min t-DCF**. It beats the best
+official baseline by 9.3 pp non-circularly, beats our own best single system by 2.4 pp
+(only just), and is **statistically indistinguishable** from the fusion that borrowed two
+published baselines and consumed 87,048 labelled target trials.
+
+**Control passed.** Adding two systems produced **insertions only** — 10 new comparison
+rows, 4 new system rows, 0 deletions — so every pre-existing interval reproduced
+bit-for-bit, and the CI-width aggregate still returns **14.337x** over the same 14
+zero-shot single systems.
+
+Artifacts: `inhouse_fusion_{cv,transfer}.csv`, `inhouse_fusion_{dev,eval}.json`,
+`bootstrap_ci_{systems,comparisons}.csv`, and per-file eval scores under
+`E:\ASVspoof\phase7_2021\inhouse_fusion_*_eval.parquet`.

@@ -348,24 +348,8 @@ PHASE7_POSTHOC_SYSTEMS = {
     "flatten_T150_aug":  ("progress", "hidden"),           # not selected
 }
 
-# --- FUSED systems (post-hoc, and NOT zero-shot) --------------------------------
-# A third registry, because a fusion is a third kind of object and the two properties
-# that separate it are the two easiest to lose track of:
-#
-#   1. It is NOT ZERO-SHOT. Every system in the two dicts above saw only 2019 data;
-#      this one's weights were fitted on 87,048 labelled 2021 `progress` trials. The
-#      claim changes from "a countermeasure trained purely on simulated replay
-#      transfers to real replay" to "with labelled target-domain data, performance
-#      improves by X" -- different scientific statements (PROJECT_PLAN 9.8b.1a.4).
-#   2. It CONTAINS systems we did not build, so it cannot be compared against the
-#      official baselines: you cannot beat a baseline by including it (9.8b.1a.1).
-#
-# Kept out of PHASE7_POSTHOC_SYSTEMS rather than merged into it for a practical reason
-# too: score_posthoc.py iterates that registry to run LCNN forward passes, and a fusion
-# has no checkpoint to load.
-PHASE7_FUSION_SYSTEMS = {
-    "fusion_ours+2GMM": ("eval",),
-}
+# (FUSED systems are registered further down, next to their score files --
+#  see PHASE7_FUSION_SYSTEMS after PA2021_FUSION_SCORES.)
 
 # Which partitions to extract. The HEADLINE number is PA2021_REPORTED_PARTITION
 # ("eval", 721,332 rows) exactly as pre-registered; `progress` and `hidden` are
@@ -419,6 +403,34 @@ PA2021_POSTHOC_SCORES = PA2021_WORK_DIR / "posthoc_scores.parquet"
 # Fused scores from the single eval application of PROJECT_PLAN 9.8b.1. A THIRD file
 # for a third kind of object -- see PHASE7_FUSION_SYSTEMS.
 PA2021_FUSION_SCORES = PA2021_WORK_DIR / "fusion_eval_scores.parquet"
+
+# --- FUSED systems (post-hoc) ----------------------------------------------------
+# A separate registry, because a fusion is a different kind of object from the two
+# single-system dicts above, and the properties that separate it are the easiest to
+# lose track of. Each entry maps a display tag to (score file, column in that file).
+#
+#   fusion_ours+2GMM          9.8b. NOT zero-shot (weights fitted on 87,048 labelled
+#                             2021 trials) and CONTAINS two official baselines, so it
+#                             can never be compared against them: you cannot beat a
+#                             baseline by including it (9.8b.1a.1).
+#   inhouse_fusion_progress   9.8c. Every component ours, so the baseline comparison
+#                             is legitimate -- but still not zero-shot.
+#   inhouse_fusion_dev        9.8c. Every component ours AND weights fitted on 2019
+#                             dev, so it never sees a 2021 LABEL. It does read
+#                             unlabelled target scores for z-normalisation (9.8c.2),
+#                             which makes it transductive but not label-dependent.
+#
+# All three stay OUT of the CI-width aggregate in bootstrap_ci: that statistic backs a
+# published claim about the 14 zero-shot single systems, and a fusion is not one.
+# Kept out of PHASE7_POSTHOC_SYSTEMS for a practical reason too -- score_posthoc.py
+# iterates that registry to run LCNN forward passes, and a fusion has no checkpoint.
+PHASE7_FUSION_SYSTEMS = {
+    "fusion_ours+2GMM":        (PA2021_FUSION_SCORES, "ours+2GMM"),
+    "inhouse_fusion_dev":      (PA2021_WORK_DIR / "inhouse_fusion_dev_eval.parquet",
+                                "inhouse_dev"),
+    "inhouse_fusion_progress": (PA2021_WORK_DIR / "inhouse_fusion_progress_eval.parquet",
+                                "inhouse_progress"),
+}
 PA2021_FAILURES_CSV = PA2021_WORK_DIR / "extraction_failures.csv"
 
 # The 2021 pooled MFCC table IS cached (~500MB for all partitions), unlike the

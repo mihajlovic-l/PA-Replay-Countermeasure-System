@@ -7,6 +7,8 @@
   "width_ratio": 14.337444442829433,
   "aggregate_systems": 14,
   "excluded_from_aggregate": [
-    "fusion_ours+2GMM"
+    "fusion_ours+2GMM",
+    "inhouse_fusion_dev",
+    "inhouse_fusion_progress"
   ]
 }

@@ -75,6 +75,19 @@ COMPARISONS = [
     # results CSV is exactly how a circular number ends up quoted. Do not add it.
     ("fusion_ours+2GMM", "timepool_T150_aug",
      "post-hoc fusion: vs the single system it contains"),
+    # 9.8c in-house fusion (PROJECT_PLAN 9.8c.3). Unlike the row above, these two
+    # contain ONLY systems we built, which is what makes the CQCC-GMM comparison
+    # legitimate here and forbidden there.
+    ("inhouse_fusion_dev", "timepool_T150_aug",
+     "in-house ZERO-SHOT fusion: vs the single system"),
+    ("inhouse_fusion_progress", "timepool_T150_aug",
+     "in-house fusion (label-fitted): vs the single system"),
+    ("inhouse_fusion_dev", "inhouse_fusion_progress",
+     "the price of 87,048 labelled target-domain trials"),
+    ("inhouse_fusion_dev", "fusion_ours+2GMM",
+     "in-house zero-shot vs the borrowed-partner fusion"),
+    ("inhouse_fusion_dev", "CQCC-GMM",
+     "in-house zero-shot fusion vs best official baseline (NOT circular)"),
 ]
 
 
@@ -113,17 +126,18 @@ def load_eval() -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str], list[s
     # and the caller excludes these from the CI-width aggregate, which backs a
     # published claim about the 13 zero-shot systems (PROJECT_PLAN 9.8b.4).
     fused: list[str] = []
-    if config.PA2021_FUSION_SCORES.exists():
-        fs = pd.read_parquet(config.PA2021_FUSION_SCORES)
-        for tag in config.PHASE7_FUSION_SYSTEMS:
-            col = tag.removeprefix("fusion_")      # parquet is keyed by candidate name
-            if col in fs.columns:
-                d = d.merge(fs[["filename", col]].rename(columns={col: tag}),
-                            on="filename", how="left")
-                if d[tag].notna().all():
-                    fused.append(tag)
-                else:
-                    d = d.drop(columns=[tag])      # partial coverage is not reportable
+    for tag, (path, col) in config.PHASE7_FUSION_SYSTEMS.items():
+        if not path.exists():
+            continue
+        fs = pd.read_parquet(path)
+        if col not in fs.columns:
+            continue
+        d = d.merge(fs[["filename", col]].rename(columns={col: tag}),
+                    on="filename", how="left")
+        if d[tag].notna().all():
+            fused.append(tag)
+        else:
+            d = d.drop(columns=[tag])              # partial coverage is not reportable
     systems += fused
 
     y = (d["label"] == "bonafide").to_numpy().astype(np.int8)

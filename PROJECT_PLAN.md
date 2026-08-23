@@ -1719,6 +1719,45 @@ at 0.24 pp), while on the **dev** arm `apply-norm` beats `fit-norm` substantiall
 because that is where the 21.7x mismatch lives. If `fit-norm` does *not* lose on the dev
 arm, the mechanism above is wrong and the amendment was unnecessary.
 
+#### 9.8c.3 Confidence intervals on the in-house fusion — declared before the run
+
+Both arms have been applied to eval once each, as 9.8c.1 declared (PROGRESS_REPORT P7).
+The point estimates are in hand and **carry no error bars**, which by this project's own
+standard (P3) means the claims are not yet reportable. Five comparisons are fixed here,
+before `bootstrap_ci` is re-run, because two of them are *expected to come back null* and
+that is only credible if it is written down first.
+
+**Why this cannot wait until after the write-up.** The gap between the in-house zero-shot
+fusion and the 9.8b borrowed-partner fusion is **0.147 pp**. For calibration, P5c's
+significant result cleared zero by 0.78 pp and P4's −1.62 pp came back *not
+distinguishable*. Writing "beats the official fusion" now would almost certainly require
+retracting it — so the framing of the headline is itself waiting on this measurement.
+
+| # | comparison | what it tests | prediction |
+|---|---|---|---|
+| 1 | `inhouse_fusion_dev` vs `timepool_T150_aug` | the zero-shot fusion gain | **excludes zero** |
+| 2 | `inhouse_fusion_progress` vs `timepool_T150_aug` | the label-fitted gain | **excludes zero**, wider margin than 1 |
+| 3 | `inhouse_fusion_dev` vs `inhouse_fusion_progress` | price of target labels | **NOT distinguishable** (0.516 pp) |
+| 4 | `inhouse_fusion_dev` vs `fusion_ours+2GMM` | in-house vs borrowed partners | **NOT distinguishable** (0.147 pp) |
+| 5 | `inhouse_fusion_dev` vs CQCC-GMM | the recovered baseline claim | **excludes zero** |
+
+**Comparison 5 is the one the whole of 9.8c was built for.** §9.8b.1a.1 forbids comparing
+a fusion against a baseline it contains. The in-house fusion contains no borrowed system,
+so this comparison is legitimate — the circularity is genuinely gone, not merely disclosed.
+
+**Comparisons 3 and 4 are predicted null, and a null is the desired result in both.**
+For 3, "labelled target-domain data buys nothing demonstrable" is a *stronger* claim for
+the thesis than a measurable gain, because the zero-shot system is the one that keeps
+every other claim intact. For 4, "matches the borrowed-partner fusion" is the honest and
+more interesting statement — the 0.147 pp was never the point; equivalence *without*
+borrowing systems or reading target labels is.
+
+**Registration.** Both systems join `config.PHASE7_FUSION_SYSTEMS`, appended last so the
+shared resample stream and `validate`'s `systems[:4]` are untouched, and **excluded from
+the CI-width aggregate**, which backs the published 14.3x claim about the 14 zero-shot
+single systems. **Control, as in 9.8b.4 C: every pre-existing system and comparison must
+reproduce bit-for-bit** — git should show insertions only.
+
 ### 9.8 Score fusion — measured among our own systems, and it does not pay
 
 Estimated on `progress` only, leaving `eval` untouched: mean-z fusion of the three best

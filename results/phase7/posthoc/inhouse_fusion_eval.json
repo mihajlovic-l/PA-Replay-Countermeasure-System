@@ -1,0 +1,41 @@
+{
+  "single_eval_eer": 31.080620723669682,
+  "single_eval_tdcf": 0.8090022974057779,
+  "arms": {
+    "dev": {
+      "candidate": "ours+LFCC",
+      "systems": [
+        "timepool_T150_aug",
+        "our-LFCC-GMM"
+      ],
+      "norm": "apply-norm",
+      "zero_shot": true,
+      "n_fit_trials": 65097,
+      "eval_eer": 28.660070074447052,
+      "eval_tdcf": 0.7601829272411,
+      "coef": [
+        3.614522709745042,
+        4.013313908555401
+      ],
+      "intercept": -6.988628325072604
+    },
+    "progress": {
+      "candidate": "ours+LFCC",
+      "systems": [
+        "timepool_T150_aug",
+        "our-LFCC-GMM"
+      ],
+      "norm": "apply-norm",
+      "zero_shot": false,
+      "n_fit_trials": 87048,
+      "eval_eer": 28.144013376232962,
+      "eval_tdcf": 0.7416548506540996,
+      "coef": [
+        1.1210200786590576,
+        0.7589622139930725
+      ],
+      "intercept": -2.1996967792510986
+    }
+  },
+  "price_of_target_labels_pp": 0.51605669821409
+}

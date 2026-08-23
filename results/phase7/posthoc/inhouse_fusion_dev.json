@@ -1,0 +1,14 @@
+{
+  "selected": {
+    "dev": {
+      "fit-norm": "ours+LFCC",
+      "apply-norm": "ours+LFCC"
+    },
+    "progress": {
+      "fit-norm": "ours+LFCC",
+      "apply-norm": "ours+LFCC"
+    }
+  },
+  "n_dev": 65097,
+  "n_progress": 87048
+}
