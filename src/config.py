@@ -127,6 +127,52 @@ CQT_BINS_PER_OCTAVE = 12
 # cropped. Swept over {150, 250, 400} in Phase 6.
 CQT_FIXED_FRAMES = 250
 
+# --- 9.8c in-house cepstral-GMM fusion partners --------------------------------
+# LFCC, standard ASVspoof recipe. The ONE thing separating this from MFCC is that
+# the filterbank is spaced LINEARLY: mel spacing compresses the top octaves, which
+# is exactly where the replay fingerprint lives, and is why LFCC beats MFCC on PA.
+LFCC_N_FFT = 512
+LFCC_WIN_LENGTH = 320           # 20 ms at 16 kHz
+LFCC_HOP_LENGTH = 160           # 10 ms
+LFCC_N_FILTERS = 70
+LFCC_N_COEFF = 20               # x {static, delta, delta-delta} = 60 dims
+
+# Constant-Q cepstral features read back out of the Phase 4 uint8 CQT cache.
+# NOT CQCC and must never be called that (PROJECT_PLAN 9.8c): real CQCC resamples
+# the geometrically-spaced bins onto a uniform scale before the DCT, which this
+# cache cannot support. Also: C0 carries no absolute level, because the cache is
+# peak-normalised per file (ref=np.max), and quantisation is CQT_TOP_DB/255 dB.
+CQTDCT_N_COEFF = 20             # likewise x3 = 60 dims
+
+# GMM back-end, matching the official baselines' component count. Fitted by
+# chunked exact EM (src/gmm.py) rather than sklearn, whose (n_frames x k) float64
+# responsibility matrix does not fit here -- see that module's docstring.
+GMM_N_COMPONENTS = 512
+GMM_MAX_ITER = 30
+GMM_TOL = 1e-4                  # on mean per-frame log-likelihood
+GMM_REG_COVAR = 1e-6
+GMM_CHUNK = 20_000              # frames per E-step chunk: 20k x 512 x 8B = 82 MB
+# Frames sampled per file, set PER CLASS to reach a comparable total, because the
+# split is ~1:9 bonafide:spoof. Equal frames per file *within* a class is what
+# matches the scoring rule (mean frame log-likelihood, so every file counts once)
+# and avoids the duration bias 6.10 measured: bonafide files are systematically
+# longer than spoof (323 vs 274 frames), and duration alone scores 41.5% EER.
+GMM_TARGET_FRAMES_PER_CLASS = 1_800_000
+GMM_MIN_FRAMES_PER_FILE = 4
+# Sampled training frames, fitted models and per-file LLR score tables. On E: with
+# every other bulky intermediate; the frame stores are ~430 MB per class per
+# feature, and NO frame-level store is ever written for 2021 (that would be ~79 GB
+# -- scoring streams instead).
+GMM_DIR = ASVSPOOF_ROOT / "gmm"
+# In-house partners. A FOURTH registry, kept separate for the same reason as
+# PHASE7_FUSION_SYSTEMS: these are ours, post-hoc, and unlike everything in
+# PHASE7_LCNN_SYSTEMS they are GMMs rather than LCNNs, with no checkpoint to load.
+PHASE7_INHOUSE_GMM_SYSTEMS = {
+    "our-LFCC-GMM":    "lfcc",
+    "our-CQT-DCT-GMM": "cqtdct",
+}
+PHASE7_INHOUSE_GMM_BY_FEAT = {v: k for k, v in PHASE7_INHOUSE_GMM_SYSTEMS.items()}
+
 # --- Phase 4 feature extraction ---
 # CQT dB -> uint8 quantization floor (matches librosa.amplitude_to_db's top_db
 # default): values are linearly mapped from [-CQT_TOP_DB, 0] dB to [0, 255].
@@ -423,7 +469,7 @@ PHASE7_RECYCLE_EVERY = 20
 
 for d in (PHASE7_DIR, PHASE7_PREREG_DIR, PHASE7_POSTHOC_DIR,
           PHASE7_PREREG_SCORES_DIR, PHASE7_POSTHOC_SCORES_DIR,
-          PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
+          GMM_DIR, PA2021_WORK_DIR, PA2021_CQT_SHARD_DIR,
           PA2021_MFCC_SHARD_DIR, PA2021_SCORE_SHARD_DIR, PA2021_CLASSICAL_SHARD_DIR):
     d.mkdir(parents=True, exist_ok=True)
 

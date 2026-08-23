@@ -2211,3 +2211,129 @@ held, two were refuted**, and both refutations were more informative than the su
 Both failures came from reasoning about a quantity on the wrong footing — A2 mixed
 partitions, C1 asserted two things that cannot both be true. Neither was a measurement
 error, and neither would have been visible without writing the prediction down first.
+
+### P6 — In-house cepstral GMMs built, and the front-end-family mechanism confirmed
+
+Two GMM systems of our own, as the fusion partners §9.8c argued for. Protocol, candidates
+and five predictions were fixed in §9.8c.1 before any of this ran. **The fusion itself has
+not run yet** — this section covers only the systems and what they measure on their own.
+
+**Why they were built** bears repeating, because it is not the obvious reason. Fusing with
+the official baselines cost four things (§9.8b.1a), and in-house partners recover three of
+them straightforwardly. The fourth — that the fused system stopped being zero-shot — is
+recoverable *only* this way: the official baselines' scores exist **only for 2021**, so
+there is nowhere else to fit the weights. Our own GMMs can be scored on 2019 dev.
+
+**What was built** (`src/gmm.py`, `src/train_gmm.py`, `src/score_gmm.py`):
+
+| tag | front-end | back-end |
+|---|---|---|
+| `our-LFCC-GMM` | LFCC, 70 linear filters, 20 coeff + Δ + ΔΔ | 512-component diagonal GMM per class |
+| `our-CQT-DCT-GMM` | dequantised cached log-CQT → DCT, 20 coeff + Δ + ΔΔ | as above |
+
+`our-CQT-DCT-GMM` is **not CQCC and is never called that**: real CQCC resamples the
+geometrically-spaced bins onto a uniform scale before the DCT, which the Phase 4 cache
+cannot support; C0 also carries no absolute level, since the cache is peak-normalised
+per file.
+
+#### P6a — Prediction 1 confirmed decisively: the cheap partner is cheap *because* it is redundant
+
+| partner | ρ with `timepool_T150_aug` (progress) |
+|---|---|
+| official CQCC-GMM | 0.284 |
+| **`our-CQT-DCT-GMM`** | **0.674** |
+
+**2.4x more correlated with our own system than the official CQCC-GMM is.** §9.8b.2
+explained CQCC-GMM's mediocre partnership by *shared constant-Q analysis*; ours reads the
+identical cached array our LCNN reads, and the correlation rises exactly as that mechanism
+demands. This is the clearest confirmation the project has produced that **fusion value is
+governed by front-end family, not by back-end paradigm** — the back-end here is a
+generative GMM against a discriminative CNN, the most different pairing available, and it
+was not enough to decorrelate them.
+
+It also retrospectively justifies refusing the cost-ordered plan: building the cheap
+partner first would have bought the weakest one.
+
+#### P6b — Prediction 5 refuted, in the favourable direction, for an unflattering reason
+
+| system | 2021 progress EER |
+|---|---|
+| `timepool_T150_aug` (ours, reference) | 29.359% |
+| **`our-CQT-DCT-GMM`** | **34.079%** |
+| **`our-LFCC-GMM`** | **35.310%** |
+| CQCC-GMM *(official)* | 36.331% |
+| LFCC-GMM *(official)* | 39.788% |
+
+Prediction 5 said both in-house GMMs would be **worse** than their official counterparts
+— different implementations, no tuning. Both are **better**, by 2.25 and 4.48 pp.
+
+**This is not evidence of a better method and must not be reported as one.** Ours train on
+the enriched resplit (175,959 files) against the baselines' challenge-compliant 54,000 —
+**3.3x the data**. The non-compliance disclosed in 7.14 is showing up here as an apparent
+advantage, which is precisely why it has to be restated wherever these numbers appear. On
+equal training data the comparison is untested and this table says nothing about it.
+
+Dev EERs are 11.147% (LFCC) and 13.889% (CQT-DCT) — far better than on 2021, the expected
+in-domain/out-of-domain gap, and the direct cause of the scale problem in P6d.
+
+#### P6c — The two in-house partners are near-independent of each other
+
+| pair | ρ |
+|---|---|
+| `our-LFCC-GMM` vs `our-CQT-DCT-GMM` | **0.040** |
+| CQCC-GMM vs LFCC-GMM (official pair) | 0.358 |
+| `our-LFCC-GMM` vs official LFCC-GMM | 0.564 |
+| `our-CQT-DCT-GMM` vs official CQCC-GMM | 0.487 |
+
+Our two partners are **nine times less correlated with each other** than the official pair
+was, which is promising for the two-GMM candidate — P5a found the official pair's mutual
+0.358 was what split their fitted weights. And each correlates only ~0.5 with its official
+namesake, confirming §9.8c's warning that these are **complementary systems, not
+reproductions**: their fusion contribution cannot be assumed to match the −2.04 / −1.69 pp
+measured for the originals.
+
+Prediction 2 (`our-LFCC-GMM` the better partner) is half-resolved: it is far more
+decorrelated (0.179 vs 0.674) while being the slightly weaker system. Decorrelation ×
+strength favours it heavily; the weight and gain halves await the fusion.
+
+#### P6d — Build health, and two caveats recorded rather than smoothed
+
+All four extractions completed with **0 failures** and quotas realised at **100.0000%**
+of nominal (37,449 × 48 and 138,510 × 13 frames), which is control (c). All four score
+files are at full coverage — 65,097 dev and 943,110 2021 rows, no NaNs, no duplicates.
+
+- **All four GMMs hit the 30-iteration cap rather than converging** to tol=1e-4. Fixed
+  iteration budgets are normal for GMM-UBM work, but these are *truncated* fits and are
+  described as such. Whether more iterations would help is untested.
+- **The variance floor is active**: minimum variance equals `reg_covar` (1e-6) exactly,
+  and the smallest mixture component carries ~10 of 1.8 M frames. Mild degeneracy,
+  contained by the regulariser, but real.
+
+**Controls.** (a) Chunked EM reproduces sklearn from identical initialisation to
+**8.17e-13**, with the mean log-likelihood identical at 0.000e+00 — the fit is exact batch
+EM computed in pieces, not an approximation, which is what allows 512 components on a
+5.9 GB machine where sklearn's own implementation needs 4–6 GB. (b) Batched scoring
+matches per-file scoring with **0 rank inversions** on the real 512-component models.
+
+That second control initially "failed" at 1.68e-06 against a 1e-9 threshold, and the
+diagnosis is worth keeping: two plausible explanations were wrong (cancellation in the
+expanded quadratic form — measured, agrees to 1.6e-13; and chunk boundaries — disabling
+chunking reproduces the identical figure). The cause is that **BLAS sums a tall matrix
+differently from a short one**, shifting a per-frame log-likelihood of magnitude ~2170 by
+~1.7e-10, with the worst case over a few hundred files reaching ~1.7e-6 where two mixture
+components sit nearly tied and the logsumexp amplifies. **The threshold was testing the
+wrong property**: these scores feed EER, which reads only ordering — the same fact that
+makes Spearman the right correlation in §9.8b.2. The control now asserts rank preservation
+primarily, with a numeric bound at 1e-4, and passes on both.
+
+A process note. The first `train_gmm` run crashed on a joblib API that does not exist
+(`Parallel._terminate_backend`; the executor is process-global and is reached through
+loky, as `evaluate_2021` already knew) — and because frames were only written when a class
+*finished*, the crash discarded five minutes of completed extraction. That violated
+CLAUDE.md's own standard. Both modules now checkpoint per chunk, and the resume path is
+**verified rather than assumed**: rewinding the sidecar, poisoning the tail with NaN so a
+silent skip could not pass, and re-running reproduces a **bit-identical** frame matrix and
+the same fitted log-likelihood.
+
+Artifacts: `E:\ASVspoof\gmm\` — sampled frames + sidecars, four `*_gmm.npz`, and four
+score tables. Next: §9.8c.1 fusion, under the two normalisation arms §9.8c.2 declares.

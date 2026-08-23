@@ -1669,6 +1669,56 @@ streaming score over 2019 dev + 943,110 2021 files ~2.5–3 h, then CQT-DCT end 
 ~1–2 GB of sampled training frames; **no frame-level store for 2021**, which would be
 ~79 GB.
 
+#### 9.8c.2 Amendment: the normalisation arm — declared before the fusion was run
+
+The GMMs are built and scored (PROGRESS_REPORT P6); the fusion has not run. Inspecting
+the **fitting partitions' own score distributions** — dev and `progress`, never `eval` —
+exposed a defect in the method 9.8b.1 declared, which is corrected here *before* any
+fusion number exists rather than after.
+
+**The defect.** 9.8b.1 fixes z-normalisation statistics to the *fitting* partition. That
+was correct there, where fitting and application were both 2021. It is not correct for
+the zero-shot arm, because dev and 2021 put these scores on incomparable scales:
+
+| system | dev mean/std | progress mean/std | std ratio |
+|---|---|---|---|
+| `our-LFCC-GMM` | −11.82 / 11.51 | 0.83 / **0.53** | **21.7x** |
+| `our-CQT-DCT-GMM` | −3.82 / 6.81 | −1.31 / 2.76 | 2.5x |
+
+Not a monotone shift but a change of shape, and the mechanism is plain: dev is *in
+domain* for a GMM trained on 2019 train, so the log-likelihood ratio spreads widely,
+while on 2021 every file is roughly equally unlikely under both models and the ratio
+compresses toward zero. Dividing 2021's LFCC scores by 11.51 instead of 0.53 delivers
+the partner at ~1/470th of its proper variance, and **the fusion would switch LFCC off**.
+The zero-shot arm would then lose for an arithmetic reason that has nothing to do with
+whether zero-shot fusion works — the most misleading kind of negative result.
+
+**What the original rule was actually protecting.** Label leakage and eval leakage. A
+mean and a standard deviation taken over 2021 scores use **no labels whatsoever**; this
+is ordinary test-time score normalisation, the same family as T-norm and Z-norm in
+speaker verification. It does introduce a **transductive assumption** — a batch of target
+data must be available at inference — and that must be stated wherever the arm is
+reported. It does not touch the zero-shot property, which is about labels.
+
+**Therefore both normalisation schemes are run, and the gap between them is the
+measurement:**
+
+| scheme | z-norm statistics from |
+|---|---|
+| `fit-norm` | the fitting partition — exactly as 9.8b.1 declared |
+| `apply-norm` | the partition being scored, labels never read |
+
+Running both is nearly free (fusion is minutes) and converts a methodological hazard into
+a quantity: **how much does score-scale mismatch cost a zero-shot fusion?** Reporting only
+the amended scheme would hide that; reporting only the original would misattribute an
+arithmetic failure to the scientific question.
+
+**Prediction, stated in advance:** `fit-norm` and `apply-norm` differ negligibly on the
+**progress** arm (fit and application are both 2021, and P5c already bounded that residual
+at 0.24 pp), while on the **dev** arm `apply-norm` beats `fit-norm` substantially —
+because that is where the 21.7x mismatch lives. If `fit-norm` does *not* lose on the dev
+arm, the mechanism above is wrong and the amendment was unnecessary.
+
 ### 9.8 Score fusion — measured among our own systems, and it does not pay
 
 Estimated on `progress` only, leaving `eval` untouched: mean-z fusion of the three best
