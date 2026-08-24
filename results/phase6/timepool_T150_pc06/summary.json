@@ -1,0 +1,21 @@
+{
+  "tag": "timepool_T150_pc06",
+  "n_frames": 150,
+  "norm": "unit",
+  "head": "timepool",
+  "params": 184017,
+  "best_epoch": 28,
+  "epochs_run": 30,
+  "train_eer_at_best": 0.0699887955182073,
+  "eer": 0.09820103187203495,
+  "threshold": 1.7100737,
+  "accuracy": 0.9018234327234742,
+  "precision_bonafide": 0.716909686899514,
+  "recall_bonafide": 0.9017558825620245,
+  "f1_bonafide": 0.798778375995718,
+  "roc_auc": 0.9646743313657472,
+  "tp_bonafide_accepted": 12685,
+  "fn_bonafide_rejected": 1382,
+  "tn_spoof_rejected": 46021,
+  "fp_spoof_accepted": 5009
+}

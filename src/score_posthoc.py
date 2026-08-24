@@ -53,11 +53,19 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cudnn.benchmark = True
 
-    systems, allowed = {}, {}
+    systems, allowed, pending = {}, {}, []
     for tag, parts in config.PHASE7_POSTHOC_SYSTEMS.items():
         path = config.PHASE6_MODELS_DIR / f"lcnn_{tag}_best.pt"
         if not path.exists():
-            raise FileNotFoundError(f"missing checkpoint: {path}")
+            # SKIP, not raise. The registry is populated when a sweep is DECLARED
+            # (9.1.1 registers all five dose points up front so none can reach eval by
+            # accident), which is necessarily before the runs finish. Aborting the pass
+            # would mean an incremental sweep could never be scored until every run was
+            # done. Skipping is announced loudly and listed again at the end, so a
+            # genuinely forgotten checkpoint is still impossible to miss.
+            pending.append(tag)
+            print(f"  {tag}: no checkpoint yet -- SKIPPED (not trained)")
+            continue
         ck = torch.load(path, map_location=device, weights_only=False)
         a = ck["args"]
         m = LCNN(n_frames=a["n_frames"], head=a["head"]).to(device)
@@ -121,6 +129,9 @@ def main() -> None:
         sub.to_csv(config.PHASE7_POSTHOC_SCORES_DIR / f"{tag}.score.txt",
                    sep=" ", header=False, index=False, float_format="%.6f")
     print(f"  exported {len(systems)} score.txt -> {config.PHASE7_POSTHOC_SCORES_DIR}")
+    if pending:
+        print(f"\n  NOT SCORED, no checkpoint yet: {', '.join(pending)}")
+        print("  Re-run this after training them; scoring is idempotent.")
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ TRAIN_EVAL_N = 20_000   # subsample size for the train-EER diagnostic
 
 def build_loaders(args):
     train_ds = CQTDataset("train", train=True, n_frames=args.n_frames, norm=args.norm,
-                          wav_aug_copies=args.wav_aug_copies)
+                          wav_aug_copies=args.wav_aug_copies, p_clean=args.p_clean)
     dev_ds = CQTDataset("dev", train=False, n_frames=args.n_frames, norm=args.norm)
 
     # Same underlying data as train_ds but scored like dev: no augmentation, centre
@@ -150,6 +150,12 @@ def main():
     p.add_argument("--wav-aug-copies", type=int, default=0,
                    help="number of pre-computed waveform-augmented copies to sample "
                         "from (0 = clean only). Requires src.augment_waveform first.")
+    p.add_argument("--p-clean", type=float, default=None,
+                   help="probability of drawing the CLEAN blob instead of an augmented "
+                        "copy (PROJECT_PLAN 9.1.1). Default None = uniform over "
+                        "{clean, aug1..N}, i.e. p(clean)=1/(N+1), the Phase 6 behaviour. "
+                        "Setting this decouples dose from diversity without generating "
+                        "any new copies.")
     p.add_argument("--no-amp", action="store_true")
     p.add_argument("--force", action="store_true", help="ignore existing checkpoint")
     args = p.parse_args()

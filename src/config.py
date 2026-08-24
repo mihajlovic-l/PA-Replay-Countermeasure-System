@@ -346,6 +346,22 @@ PHASE7_CLASSICAL_SYSTEMS = {"MFCC-SVM": 0.09216, "MFCC-RF": 0.11736}
 PHASE7_POSTHOC_SYSTEMS = {
     "timepool_T150_aug": ("progress", "eval", "hidden"),   # winner
     "flatten_T150_aug":  ("progress", "hidden"),           # not selected
+    # --- 9.1 dose sweep. Same T150+timepool configuration as the incumbent above,
+    # varying ONLY p(clean): the probability of drawing the unaugmented blob. No new
+    # copies are generated -- these reweight cqt_train_aug{1,2,3}, which is what
+    # separates dose from diversity (9.1.1). `timepool_T150_aug` IS the p=0.25 point.
+    # All four are `progress`-only until the declared rule names a winner, so none can
+    # reach eval even by accident.
+    "timepool_T150_pc50": ("progress",),    # p(clean)=0.500, equivalent to 1 copy
+    "timepool_T150_pc17": ("progress",),    # p(clean)=0.167, equivalent to 5 copies
+    "timepool_T150_pc12": ("progress",),    # p(clean)=0.125, equivalent to 7 copies
+    "timepool_T150_pc06": ("progress",),    # p(clean)=0.0625, equivalent to 15 copies
+}
+# The dose each tag was trained at, so score_posthoc/report cannot drift from the runs.
+PHASE7_DOSE_SWEEP = {
+    "timepool_T150_pc50": 0.5,     "timepool_T150_aug":  0.25,
+    "timepool_T150_pc17": 0.167,   "timepool_T150_pc12": 0.125,
+    "timepool_T150_pc06": 0.0625,
 }
 
 # (FUSED systems are registered further down, next to their score files --

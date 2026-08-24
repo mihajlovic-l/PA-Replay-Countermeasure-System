@@ -972,7 +972,24 @@ document first, selects on `progress`, and confirms once. An experiment that has
 declared a protocol does not get to touch `eval` at all, and that is the constraint doing
 the actual work.
 
-### 9.1 Push the augmentation axis further — highest expected value
+### 9.1 ~~Push the augmentation axis further~~ — **DONE. The axis is saturated.**
+
+**Outcome (PROGRESS_REPORT P8): the first copy is the entire effect.** At T150/timepool,
+`p(clean)` 1.0 → 0.5 buys −2.717 pp on `progress`; the whole range 0.5 → 0.0625 then spans
+**0.103 pp** and is not monotone. The incumbent is over-augmented — three copies where one
+would do — because three was chosen at T400/flatten, where the axis is real, and does not
+transfer. All four declared predictions held; the decision rule retained
+`timepool_T150_aug` and **no eval application was spent**. The diversity axis is moot,
+having been contingent on dose still moving.
+
+The most quotable by-product: across the same sweep **dev EER moves 3.236 pp while
+progress EER moves 0.103 pp — 31x more.** Dev measures the in-domain *cost* of
+augmentation precisely and is blind to the out-of-domain benefit.
+
+The original reasoning is kept below, since the reframing is what made the experiment
+cheap enough to run at all.
+
+#### 9.1-orig The argument as it stood before the runs
 
 Waveform augmentation was the strongest lever found and **the dose-response has not
 plateaued**: 0 → 1 → 3 copies gives 39.747 → 34.006 → 32.665% EER, still falling. On
@@ -1016,6 +1033,69 @@ collision noted in 6.10 (multiplier `1_000_000`).
 already close to P1's ±0.5–1.0 pp checkpoint-noise floor. The in-domain cost also grows
 monotonically, so dev EER will keep looking worse — which by now is expected rather than
 alarming.
+
+#### 9.1.1 Declared protocol — fixed before any run
+
+**The knob.** `datasets.py` draws the source blob uniformly over `{clean, aug1..N}`, so
+`p(clean) = 1/(N+1)` *exactly* — copy count and dose are the same parameter. A `p_clean`
+argument decouples them: draw clean with that probability, otherwise uniformly among the
+augmented copies. When `p_clean` is unset the existing single-`integers` call is left
+untouched, so **every Phase 6 run still reproduces bit-for-bit** — that is the control.
+
+**Configuration: T150 + timepool**, the current best single system, *not* the T400/flatten
+setting where the original dose curve was measured. P4 showed these axes interact
+sub-additively, so the shape measured at T400 does not transfer for free; and T150 runs at
+~6.3 min/epoch against T400's ~22, making the sweep 2–3x cheaper.
+
+**Candidates** (fixed here; not chosen from results):
+
+| tag | p(clean) | equivalent copies | status |
+|---|---|---|---|
+| `timepool_T150_pc50` | 0.500 | 1 | new — confirms the curve behaves at T150 at all |
+| **`timepool_T150_aug`** | **0.250** | 3 | **already run**, 29.359% progress |
+| `timepool_T150_pc17` | 0.167 | 5 | new |
+| `timepool_T150_pc12` | 0.125 | 7 | new |
+| `timepool_T150_pc06` | 0.0625 | 15 | new — tests the turnover |
+
+No copies are generated: all four reweight the three `cqt_train_aug{1,2,3}` blobs already
+on disk. **Order by information, not cost** (the four are equally expensive): `pc12` first
+— does more dose help at all — then `pc06` to test the turnover, then `pc17` and `pc50` to
+fill in. An early stop therefore still answers the primary question.
+
+**Development.** All candidates scored on `progress` only. The four new tags enter
+`PHASE7_POSTHOC_SYSTEMS` with a `("progress",)` whitelist, so `score_posthoc` filters
+before the forward pass and **none of them can reach eval until one is declared** — the
+same in-code enforcement P4 used, and for the same reason.
+
+**Decision rule.** Winner is the lowest `progress` EER. If the winner is not the incumbent
+`timepool_T150_aug` and beats it by **less than 1.0 pp**, the incumbent is retained: P1
+measured checkpoint-choice noise at ±0.5–1.0 pp, so a smaller gap is not attributable to
+the dose change. Only a declared winner receives the single eval application.
+
+**Predictions, stated in advance:**
+
+1. **The curve keeps flattening** — the gain from 0.25 → 0.125 is smaller in magnitude
+   than the previous step's −1.34 pp.
+2. **`pc06` is not the winner.** 6.9's own reasoning: keeping clean data in the pool is
+   deliberate, because training almost exclusively on perturbed audio adapts the model to
+   a distribution neither dev nor 2021 has. There should be a turnover or a plateau.
+3. **Dev EER worsens monotonically as p(clean) falls.** Declared for the reason P4's
+   prediction 3 existed — so a good run is not abandoned mid-training on a bad dev number,
+   which nearly happened once already.
+4. **The winner beats `timepool_T150_aug` by less than 1.5 pp on progress**, i.e. the
+   remaining headroom on this axis is small and probably not separately demonstrable
+   against the ±1.5–3.6 pp speaker-clustered CI.
+
+**What this separates, for the first time.** Copy count buys perturbation **diversity**;
+clean probability buys **dose**. Every run to date confounded them. If the dose axis is
+still moving at 0.125, generating more copies becomes worth testing *at a matched clean
+fraction* — the only design that can attribute a further gain to diversity. If the dose
+axis is flat, §9.1 closes and no copies need generating at all.
+
+**Out of scope, deliberately.** If a new winner emerges it changes the fusion's primary
+input, and re-fusing would be worth doing — but that is a **separate declared experiment**
+with its own predictions and its own eval application, not a rider on this one. The GMM
+partners are unaffected either way.
 
 ### 9.2 Extend T downward
 
@@ -1145,19 +1225,24 @@ room-triples the paper defines in its footnote 7 split cleanly into group means 
 
 ### 9.5b Follow-ups created by the paper analysis (new)
 
-- **Train on VAD-trimmed audio** — *motivation partly overtaken by P4; DEFERRED, not
-  dismissed.* PROGRESS_REPORT 7.19 shows our non-augmented models lose 11.5–16.7 pp when
-  non-speech is removed, versus 0.3–6.9 pp for the official baselines — they lean on
-  non-speech much harder than the published systems do, which the paper (§VI) explicitly
-  flags as an undesirable database cue.
+- ~~**Train on VAD-trimmed audio**~~ — **DISMISSED.** PROGRESS_REPORT 7.19 showed our
+  non-augmented models losing 11.5–16.7 pp when non-speech is removed, against 0.3–6.9 pp
+  for the official baselines — leaning on a cue the paper (§VI) flags as an undesirable
+  database artefact. This item existed to remove that dependence.
 
-  **P4 then largely closed this by accident.** `timepool_T150_aug` does not degrade on
-  trimmed audio at all — 27.87 → **26.87**, it *improves* — so the defect this item was
-  written to fix is no longer present in the system that would be fixed. What remains is
-  a genuine but weaker question: whether *training* on trimmed audio removes the residual
-  dependence in the non-augmented models, and whether it beats augmentation at doing so.
-  Still addresses a stated limitation of the field, so it stays on the list; it is simply
-  no longer repairing anything in the current best system.
+  **P4 closed it by accident, and P7 made it moot.** `timepool_T150_aug` does not degrade
+  on trimmed audio at all — 27.87 → **26.87**, it *improves* — so the defect is already
+  absent from the system that would have been repaired, and augmentation removed it
+  without anything being trained on trimmed audio. What remained was the weaker question
+  of whether trimmed *training* would remove the residual dependence in the
+  **non-augmented** models — but those are no longer on any path the thesis takes: the
+  headline is a fusion whose CQT-LCNN component is augmented, and the non-augmented runs
+  survive only as controls on the T and augmentation axes.
+
+  So the experiment would cost a full extraction pass plus a training run to improve a
+  system nothing else depends on, and to answer a question the augmentation result has
+  already answered in the affirmative by another route. Recorded as dismissed **with its
+  reasoning**, so it is not rediscovered and re-proposed later.
 - **Investigate the attacker-room grouping.** Why is room group 2 (`r4,r5,r6`) ~15 pp
   easier than group 1? Nothing in the published analysis explains it, because rooms
   were excluded there after a size correlation came back null.

@@ -2472,3 +2472,110 @@ zero-shot single systems.
 Artifacts: `inhouse_fusion_{cv,transfer}.csv`, `inhouse_fusion_{dev,eval}.json`,
 `bootstrap_ci_{systems,comparisons}.csv`, and per-file eval scores under
 `E:\ASVspoof\phase7_2021\inhouse_fusion_*_eval.parquet`.
+
+### P8 — The augmentation dose axis is saturated: one copy is the whole effect
+
+§9.1 was the last open axis and the one with the highest expected value. It is now closed,
+with a sharper answer than the plan anticipated. Protocol, candidates, decision rule and
+four predictions were fixed in §9.1.1 before any run started.
+
+**The reframing that made this cheap.** `datasets.py` draws the source blob uniformly over
+`{clean, aug1..N}`, so `p(clean) = 1/(N+1)` *exactly* — copy count and dose were the same
+knob, and the plan's original "try 5–7 copies" would have spent ~5 h of generation and
+~18 GB of disk to move the dose 25% → 12.5%, a *smaller* step than the previous one. A
+`p_clean` parameter reweights the three copies already on disk instead, which costs
+nothing and, for the first time, separates **dose** from perturbation **diversity**.
+
+#### P8a — The result: no dose-response beyond the first copy
+
+All at T150 + timepool, scored on `progress` (87,048 trials):
+
+| run | p(clean) | ≡ copies | progress EER | dev EER | step |
+|---|---|---|---|---|---|
+| `T150` (no augmentation) | 1.0 | 0 | 31.973% | 6.584% | — |
+| **`timepool_T150_pc50`** | 0.5 | 1 | **29.256%** | 7.546% | **−2.717** |
+| `timepool_T150_aug` *(incumbent)* | 0.25 | 3 | 29.359% | 8.907% | +0.103 |
+| `timepool_T150_pc12` | 0.125 | 7 | 29.298% | 9.405% | −0.061 |
+| `timepool_T150_pc06` | 0.0625 | 15 | 29.277% | 9.820% | −0.021 |
+
+**The first copy delivers the entire effect.** Everything after it spans **0.103 pp across
+an 8x dose range**, and is not even monotone — 0.5 is best, 0.25 is *worst*, 0.125 and
+0.0625 fall between. That ordering is noise, not a curve: the whole span is a tenth of
+P1's ±0.5–1.0 pp checkpoint-noise floor and a thirtieth of the speaker-clustered CI.
+
+This is a stronger statement than "the dose-response flattens", which is what §9.1
+predicted. At T150/timepool **there is no dose-response beyond one copy at all.**
+
+**It also means the incumbent is over-augmented for no benefit.** `timepool_T150_aug` uses
+three copies; one would have done. Three was chosen at T400/flatten, where the axis is
+real — 100% → 50% buys −5.741 pp and 50% → 25% another −1.341. It does not transfer to
+T150. That is the sub-additivity P4 identified between the T and augmentation axes, now
+measured on the augmentation axis directly rather than inferred from two endpoints.
+
+#### P8b — Dev EER moves 31x more than progress EER across the same sweep
+
+Prediction 3 held **perfectly monotonically across all four dose points** (7.546 → 8.907 →
+9.405 → 9.820), and it produces the cleanest demonstration this project has of why dev is
+the wrong selection criterion:
+
+| | range across the sweep |
+|---|---|
+| dev EER | **3.236 pp** |
+| progress EER (once augmented) | **0.103 pp** |
+
+**Dev is not noisy here — it is precisely measuring the in-domain *cost* of augmentation,
+with high sensitivity, while being completely blind to the out-of-domain benefit.** A
+dev-driven search over this axis would have confidently selected the least-augmented model
+and concluded augmentation was harmful. 7.13 established the dev→2021 inversion across
+*configurations*; this measures it along a *single controlled axis*, where the ratio of
+sensitivities is 31:1. It is the sharpest version of the argument in the report and
+belongs wherever the thesis defends its choice of selection criterion.
+
+#### P8c — The epoch confound, closed on evidence rather than argument
+
+All three new runs stopped at the `LCNN_EPOCHS = 30` cap with best epochs at 28–29, while
+the incumbent had run 34 to early stopping (`LCNN_EARLY_STOP_PATIENCE = 8`) with its best
+at 26. Since more augmentation demonstrably slows convergence, the truncation biases
+*against* the higher-dose runs — the direction that would manufacture exactly the null
+observed.
+
+**It did not happen, and the data says so.** A truncation bias must be ordered by dose:
+higher dose converges slower, so it should be hurt most. The observed ordering by progress
+EER is 0.5, 0.0625, 0.125, 0.25 — **not ordered by dose in any direction**. There is no
+systematic truncation effect, only the 0.103 pp of scatter already attributed to noise. A
+matched-budget re-run was considered and correctly skipped.
+
+#### P8d — Outcome, and what it closes
+
+| prediction (declared in §9.1.1) | outcome |
+|---|---|
+| 1. the curve keeps flattening | ✅ −0.061 pp against the previous −1.341 |
+| 2. `pc06` is not the winner | ✅ — but by **plateau, not turnover** |
+| 3. dev EER worsens monotonically as p(clean) falls | ✅ all four points, perfectly monotone |
+| 4. winner beats the incumbent by < 1.5 pp | ✅ by 0.103 pp |
+
+Prediction 2's *outcome* held while its *mechanism* did not, and that is worth recording.
+It predicted a **turnover** on 6.9's reasoning that training almost exclusively on
+perturbed audio would adapt the model to a distribution neither dev nor 2021 has. No
+degradation appeared at any dose. At p = 0.0625 the model still draws clean 1 in 16 times,
+with SpecAugment and random crops applied on top regardless, and that is evidently enough
+clean exposure. The turnover may exist further out; it is not reachable by reweighting
+three copies.
+
+**The declared decision rule retains the incumbent.** The best point beats it by 0.103 pp,
+far inside the 1.0 pp threshold set from P1's noise floor, so `timepool_T150_aug` stands
+and **§9.1 closed without spending an eval application**. The diversity axis is moot: it
+was explicitly contingent on the dose axis still moving, and it is not.
+
+Artifacts: `results/phase6/timepool_T150_pc{50,12,06}/`, scores in
+`posthoc_scores.parquet` under the `("progress",)` whitelist — none of the four sweep
+candidates can reach eval, enforced in `config.PHASE7_POSTHOC_SYSTEMS` rather than
+remembered.
+
+Two infrastructure notes. `score_posthoc` previously *raised* on a missing checkpoint,
+which would have aborted the whole pass: §9.1.1 registers all five dose points up front so
+none can reach eval by accident, which necessarily means registering them before they are
+trained. It now skips untrained systems, announces each one, and re-lists them at the end.
+And the `p_clean` default path is byte-for-byte the Phase 6 draw, including its RNG
+consumption — verified, along with the requested dose being hit to within 0.0013 and the
+augmented copies staying uniform among themselves.

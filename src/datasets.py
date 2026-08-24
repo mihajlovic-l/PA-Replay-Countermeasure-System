@@ -75,7 +75,7 @@ class CQTDataset(Dataset):
     def __init__(self, split: str, train: bool, n_frames: int | None = None,
                  norm: str | None = None, augment: bool | None = None,
                  index: pd.DataFrame | None = None, seed: int = config.RANDOM_SEED,
-                 wav_aug_copies: int = 0):
+                 wav_aug_copies: int = 0, p_clean: float | None = None):
         self.split = split
         self.train = train
         self.T = n_frames if n_frames is not None else config.CQT_FIXED_FRAMES
@@ -93,6 +93,17 @@ class CQTDataset(Dataset):
         # The CLEAN blob stays in the pool, so ~1/(n+1) of draws are unmodified:
         # training exclusively on perturbed audio would adapt the model to an input
         # distribution that neither dev nor the 2021 eval set actually has.
+        #
+        # `p_clean` decouples DOSE from DIVERSITY (PROJECT_PLAN 9.1.1). With a uniform
+        # draw the two are the same knob -- N copies forces p(clean) = 1/(N+1) exactly,
+        # so the dose can only be moved by generating more copies, which shifts it
+        # hyperbolically (25% -> 12.5% costs four more copies and ~18 GB). Setting
+        # p_clean reweights the copies already on disk instead: copy count then buys
+        # perturbation diversity, and p_clean buys dose, independently.
+        #
+        # Left as None the draw below is byte-for-byte the Phase 6 one, including its
+        # RNG consumption, so every Phase 6 run still reproduces exactly.
+        self.p_clean = p_clean
         self.blob_paths = [self.blob_path]
         if self.augment and split == "train" and wav_aug_copies > 0:
             from .augment_waveform import aug_blob_path
@@ -126,7 +137,16 @@ class CQTDataset(Dataset):
         # Draw a fresh copy each access, so across epochs the same file is seen
         # clean and under several different augmentation chains -- composed on top
         # of the random crop and SpecAugment applied downstream.
-        fh = self._fh[0] if len(self._fh) == 1 else self._fh[int(self._rng.integers(0, len(self._fh)))]
+        if len(self._fh) == 1:
+            fh = self._fh[0]
+        elif self.p_clean is None:
+            # Uniform over {clean, aug1..N} -- the Phase 6 path, untouched so those
+            # runs reproduce exactly. One integers() call, as before.
+            fh = self._fh[int(self._rng.integers(0, len(self._fh)))]
+        elif self._rng.random() < self.p_clean:
+            fh = self._fh[0]
+        else:
+            fh = self._fh[1 + int(self._rng.integers(0, len(self._fh) - 1))]
         fh.seek(int(self.offsets[i]))
         raw = fh.read(config.CQT_N_BINS * n)
         return np.frombuffer(raw, dtype=np.uint8).reshape(config.CQT_N_BINS, n)
