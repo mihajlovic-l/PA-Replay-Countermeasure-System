@@ -356,6 +356,11 @@ PHASE7_POSTHOC_SYSTEMS = {
     "timepool_T150_pc17": ("progress",),    # p(clean)=0.167, equivalent to 5 copies
     "timepool_T150_pc12": ("progress",),    # p(clean)=0.125, equivalent to 7 copies
     "timepool_T150_pc06": ("progress",),    # p(clean)=0.0625, equivalent to 15 copies
+    # --- 9.2 T sweep below 150. Same timepool head and the incumbent's exact
+    # augmentation (3 copies, uniform draw => p(clean)=0.25), so T is the ONLY variable
+    # that moves against `timepool_T150_aug`. `progress`-only until one is declared.
+    "timepool_T100_aug": ("progress",),
+    "timepool_T75_aug":  ("progress",),
 }
 # The dose each tag was trained at, so score_posthoc/report cannot drift from the runs.
 PHASE7_DOSE_SWEEP = {

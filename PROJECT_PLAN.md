@@ -1097,7 +1097,25 @@ input, and re-fusing would be worth doing — but that is a **separate declared 
 with its own predictions and its own eval application, not a rider on this one. The GMM
 partners are unaffected either way.
 
-### 9.2 Extend T downward
+### 9.2 ~~Extend T downward~~ — **DONE. T=150 is a bracketed minimum.**
+
+**Outcome (PROGRESS_REPORT P9):** T=100 costs **+2.326 pp** and T=75 **+3.553 pp** against
+the incumbent, so the axis is U-shaped with its minimum at T=150 rather than monotone up
+to the edge of the sweep. The incumbent stands and **no eval application was spent**.
+Predictions 1, 3 and 4 held; prediction 2 was refuted — it put T=100 within 1.0 pp, having
+extrapolated the decaying marginal gain instead of trusting this section's own warning
+that the curve "may turn over immediately".
+
+**The declared padding-mismatch diagnostic was refuted by direct measurement**, and the
+mechanism is better stated as *distortion of the target clip*: mismatch is lowest where
+performance is worst (T=400, T=75) and highest where it is best (T=150), whereas T=150 is
+the setting that neither heavily tiles nor heavily crops 2021 audio — it sits +9 frames
+from the 2021 median of 141, against 2019's 270. **The optimal T is a property of the
+target corpus's duration distribution**, which can be read off before training.
+
+The original reasoning is kept below.
+
+#### 9.2-orig The argument as it stood before the runs
 
 On 2021 the T-axis is monotonic in the opposite direction to dev: T150 34.420 < T250
 35.816 < T400 38.031. **T=100 and T=75 are untested**, cheap, and train faster than
@@ -1106,6 +1124,75 @@ anything run so far.
 *Why it might not pay*: T=150 already underfits in-domain (6.584% dev EER, and 6.6
 showed it underfits rather than overfits), so there is a floor below which the model
 simply lacks context. The curve may turn over immediately.
+
+#### 9.2.1 Declared protocol — fixed before any run
+
+**Why this is now the only open axis.** §9.1 closed the augmentation axis (P8: saturated
+after one copy), §9.5b is dismissed, and fusion is done. T is what remains, it is the
+axis still monotone on 2021, and it is the cheapest thing in the project.
+
+**The T axis, unaugmented, on `progress`:**
+
+| T | run | progress EER | dev EER | cost |
+|---|---|---|---|---|
+| 400 | `T400` | 36.364% | 0.902% | 11.08 h |
+| 250 | `baseline_T250` | 32.683% | 2.780% | 4.79 h |
+| **150** | `T150` | **31.973%** | 6.584% | 2.19 h |
+| 100 | — | ? | ? | ~1.5 h |
+| 75 | — | ? | ? | ~1.1 h |
+
+Monotone in the opposite direction to dev, and **the marginal gain is already shrinking**
+— 400→250 buys −3.68 pp, 250→150 buys only −0.71 pp. Extrapolating that decay, 150→100
+would buy a few tenths, which is inside the noise floor. That is the honest prior, and it
+is why this is worth ~3 h and not more.
+
+**Candidates** (fixed here):
+
+| tag | T | note |
+|---|---|---|
+| `timepool_T100_aug` | 100 | |
+| `timepool_T75_aug` | 75 | |
+| `timepool_T150_aug` | 150 | **already run** — the incumbent, 29.359% |
+
+**One variable only.** Both runs use `timepool`, `--wav-aug-copies 3` with the default
+uniform draw, i.e. p(clean) = 0.25 — *the incumbent's exact augmentation setting*. §9.1
+showed p = 0.5 and 0.25 are indistinguishable, so switching to the cheaper single copy
+would change two variables at once and forfeit the clean comparison. Isolating one axis
+is the same discipline 6.3 used to make the front-end claim attributable.
+
+**Development** on `progress` only; both tags enter `PHASE7_POSTHOC_SYSTEMS` with a
+`("progress",)` whitelist so neither can reach eval until one is declared.
+
+**Decision rule**, unchanged from §9.1.1: lowest `progress` EER wins, but a winner that
+beats the incumbent by **less than 1.0 pp** does not displace it, because P1 measured
+checkpoint-choice noise at ±0.5–1.0 pp. Only a declared winner receives the single eval
+application.
+
+**Predictions, stated in advance:**
+
+1. **The T curve turns over or flattens by T=75.** T=150 already underfits (6.6), and at
+   T=75 the model sees 1.2 s of context — less than a single word. Something has to give.
+2. **T=100 lands within 1.0 pp of the incumbent**, i.e. does not displace it under the
+   decision rule. Reasoning: the 250→150 step already decayed to −0.71 pp, and 150→100 is
+   a smaller step in frames than that one was.
+3. **Dev EER worsens monotonically as T falls**, continuing 0.902 → 2.780 → 6.584. Declared
+   for the same reason it was in §9.1.1 and P4 — so a good run is not abandoned on a bad
+   dev number.
+4. **The incumbent is retained** and §9.2 spends no eval application. Stated plainly so
+   that a null is a recorded outcome rather than a disappointment; on the evidence above
+   this is the likeliest result, and the axis is cheap enough to close properly anyway.
+
+**A mechanism worth watching, not predicting.** 2019's median CQT is 267 frames while 2021
+eval projects to ~149, so T=150 is the first setting that stops padding 2021 clips — much
+of the T-axis gain may be *padding-mismatch reduction* rather than context reduction.
+Below 150 that explanation is exhausted: T=100 and T=75 crop 2021 clips too, so both
+corpora are cropped and the mismatch story no longer applies. **If the gains continue
+below 150, padding mismatch was not the mechanism; if they stop, it probably was.** That
+is a genuine diagnostic and it is the strongest reason to run this beyond the EER itself.
+
+**Cost** ~1.5 h (T100) + ~1.1 h (T75), scaling roughly linearly in frames from T150's
+6.26 min/epoch — call it **3 h total**, plus ~20 min of scoring. The cheapest experiment
+in the project, and the last one on the list.
 
 ### 9.3 Combine 9.1 and 9.2 — **DONE.** New best, honestly bounded
 

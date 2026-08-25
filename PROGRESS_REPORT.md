@@ -2579,3 +2579,109 @@ trained. It now skips untrained systems, announces each one, and re-lists them a
 And the `p_clean` default path is byte-for-byte the Phase 6 draw, including its RNG
 consumption — verified, along with the requested dose being hit to within 0.0013 and the
 augmented copies staying uniform among themselves.
+
+### P9 — The T axis has a real minimum at 150, and the declared mechanism was wrong
+
+The last open item on the §9 list. Protocol and four predictions fixed in §9.2.1 before
+either run. Cost 4.5 h, which makes it the cheapest experiment in the project.
+
+#### P9a — The axis is U-shaped and now bracketed on both sides
+
+| run | T | progress EER | vs incumbent | dev EER | hours |
+|---|---|---|---|---|---|
+| `timepool_T150_aug` *(incumbent)* | 150 | **29.359%** | — | 8.907% | 3.63 |
+| `timepool_T100_aug` | 100 | 31.685% | **+2.326** | 9.713% | 2.47 |
+| `timepool_T75_aug` | 75 | 32.912% | **+3.553** | 11.048% | 2.02 |
+
+Placed against the unaugmented arm from Phase 6, the full axis reads:
+
+```
+T   400 -> 250 -> 150   :  36.364 -> 32.683 -> 31.973    (-3.681, -0.710)
+T   150 -> 100 -> 75    :  29.359 -> 31.685 -> 32.912    (+2.326, +3.553)   augmented
+```
+
+**T=150 is a genuine optimum, not the edge of an unexplored range.** Phase 6 could only
+say the axis was monotone within 150–400; it is now bracketed, and the incumbent sits at
+the minimum.
+
+Predictions 1, 3 and 4 held: the curve turns over, dev EER is monotone in T
+(8.907 → 9.713 → 11.048), and the decision rule retained the incumbent, so **§9.2 spent
+no eval application**.
+
+**Prediction 2 was refuted.** It put T=100 within 1.0 pp of the incumbent; the true figure
+is +2.326 pp, more than double. The reasoning was an extrapolation of the decaying
+marginal gain (−3.681 then −0.710, so the next step should be small) — but §9.2's own
+stated risk, *"T=150 already underfits in-domain, so there is a floor below which the
+model simply lacks context; the curve may turn over immediately"*, was the correct call.
+**A numeric extrapolation was allowed to override a regime boundary the project had
+already identified.** The turnover also arrived earlier than prediction 1 guessed: at
+T=100, not T=75.
+
+#### P9b — The declared diagnostic was badly constructed, and the direct measurement refutes it
+
+§9.2.1 declared: *"If the gains continue below 150, padding mismatch was not the
+mechanism; if they stop, it probably was."* The gains stopped — they reversed. By that
+rule, padding mismatch was implicated. **Measuring it directly says otherwise:**
+
+| T | 2019 padded | 2021 padded | mismatch | progress EER |
+|---|---|---|---|---|
+| 400 | 90.4% | 99.9% | **9.5 pp** | 36.364% *(worst)* |
+| 250 | 39.3% | 94.2% | 54.9 pp | 32.683% |
+| 150 | 2.3% | 58.8% | **56.5 pp** | 31.973% *(best)* |
+| 100 | 0.0% | 10.8% | 10.8 pp | 31.685% |
+| 75 | 0.0% | 0.9% | **0.9 pp** | 32.912% |
+
+Mismatch is **lowest exactly where performance is worst** (T=400 and T=75) and **highest
+where it is best** (T=150) — the opposite of the hypothesis. The declared test was a weak
+inference: "gains stop" is equally well explained by context starvation, so the diagnostic
+could never have separated the two. The direct measurement is cheap, was available at any
+point, and should have been run *before* the indirect test was declared. Recorded as a
+lesson about experiment design rather than about T.
+
+#### P9c — What the data does support: the window should match the TARGET domain
+
+| T | tiling applied to a 2021 clip | clip retained |
+|---|---|---|
+| 400 | **2.92x** | 100% |
+| 250 | 1.83x | 99.4% |
+| **150** | **1.18x** | **91.3%** |
+| 100 | 1.01x | 71.5% |
+| 75 | 1.00x | 54.6% |
+
+2019 train has a median of **270** frames against 2021 progress's **141** — the corpora
+differ ~1.9x in natural length — and **T=150 sits +9 frames from the 2021 median**.
+
+So the operative quantity is not the 2019-vs-2021 padding *mismatch* but the **absolute
+distortion applied to the target clip**. Above 150 the model is fed synthetic periodicity
+no real recording contains (at T=400, a median 2021 clip is tiled nearly 3x); below 150 it
+is fed genuinely truncated evidence (at T=75, barely half the clip). The optimum is where
+both are minimised, and that is the target corpus's own median duration.
+
+**This is the more useful claim for the thesis**, and it is transferable: the optimal T is
+a property of the *target* corpus's duration distribution, readable before training rather
+than discovered with five runs. It also explains the otherwise odd fact that T=150 wins
+despite 2019 favouring longer windows — the window should be matched to the domain the
+system must generalise **to**, not the one it trains on. That is the same lesson 7.13 and
+P8 teach from the selection-criterion side, arriving here from the data-geometry side.
+
+**Stated as a caveat, not smoothed over:** this is a mechanistic reading of five points,
+not a controlled test. Isolating it properly would require varying the 2021 duration
+distribution, which the corpus does not permit. It is offered as the best explanation
+consistent with the measurements, and the padding-mismatch alternative is *excluded* by
+them.
+
+#### P9d — Where this leaves the §9 list
+
+Every axis is now closed. §9.1 saturated (P8), §9.2 has a bracketed minimum at the
+incumbent (P9), §9.3–9.8c done, §9.4–9.7 done, §9.5b dismissed. **`timepool_T150_aug`
+remains the best single system and the headline is unchanged**; the best overall result is
+still the zero-shot in-house fusion from P7.
+
+Two by-products worth carrying into the write-up: the T axis is now a **bracketed U** with
+a mechanistic account rather than a monotone trend cut off at the edge of the sweep, and
+both P8 and P9 add controlled single-axis evidence that dev EER is anti-correlated with
+transfer — P8 with a 31:1 sensitivity ratio, P9 with dev worsening monotonically as
+progress EER traces a U.
+
+Artifacts: `results/phase6/timepool_T{100,75}_aug/`, scores in `posthoc_scores.parquet`
+under the `("progress",)` whitelist.
