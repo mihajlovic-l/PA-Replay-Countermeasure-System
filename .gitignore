@@ -54,3 +54,9 @@ conversation_export/
 # OS junk
 Thumbs.db
 .DS_Store
+
+# Thesis drafts (Typst, cirko/typst-ftn template). Kept local, not versioned with the
+# research code: the write-up is a separate deliverable with its own edit history, and
+# neither draft should ever silently overwrite the other.
+/Thesis paper/
+/Diplomski rad/
