@@ -1106,12 +1106,15 @@ Predictions 1, 3 and 4 held; prediction 2 was refuted — it put T=100 within 1.
 extrapolated the decaying marginal gain instead of trusting this section's own warning
 that the curve "may turn over immediately".
 
-**The declared padding-mismatch diagnostic was refuted by direct measurement**, and the
-mechanism is better stated as *distortion of the target clip*: mismatch is lowest where
-performance is worst (T=400, T=75) and highest where it is best (T=150), whereas T=150 is
-the setting that neither heavily tiles nor heavily crops 2021 audio — it sits +9 frames
-from the 2021 median of 141, against 2019's 270. **The optimal T is a property of the
-target corpus's duration distribution**, which can be read off before training.
+**The declared padding-mismatch diagnostic was refuted by direct measurement** (P9b), and
+the replacement account — *distortion of the target clip*, with T=150 sitting +9 frames
+from 2021's median of 141 — **has since been refuted as well** (§9.2.2, P10). Stratifying
+`progress` by recording duration shows T=150 winning 9 of 10 stratum/arm cells across a
+2.2x range of target durations; the one movement is not distinguishable from zero, while
+the decisive contrast is significant *against* the account (in the shortest stratum, T=100
+is +3.76 pp worse than T=150). **T≈150 is a property of the model and the task, not of the
+target corpus**, and the alignment with 2021's median is a coincidence. The claim that the
+optimal T can be read off the target duration distribution before training is withdrawn.
 
 The original reasoning is kept below.
 
@@ -1193,6 +1196,59 @@ is a genuine diagnostic and it is the strongest reason to run this beyond the EE
 **Cost** ~1.5 h (T100) + ~1.1 h (T75), scaling roughly linearly in frames from T150's
 6.26 min/epoch — call it **3 h total**, plus ~20 min of scoring. The cheapest experiment
 in the project, and the last one on the list.
+
+#### 9.2.2 ~~Duration-stratified test of the target-median account~~ — **DONE. Account REFUTED.**
+
+**Outcome (PROGRESS_REPORT P10):** the refutation condition fired. T=150 wins 9 of 10
+stratum/arm cells; the single movement is **−0.71 pp [−2.30, +0.87]**, not
+distinguishable from zero; and in the shortest stratum the account's own prediction is
+significantly inverted (**T=100 is +3.76 pp [+2.19, +5.33] worse** than T=150, which the
+account says should be penalised there for tiling). T=400 loses significantly even in the
+longest stratum, where it barely tiles at all. Cost: minutes, on cached scores, no eval
+application. The protocol as declared is kept below.
+
+**Declared before the test was run.** P9c proposed that the optimal T is a property of the
+**target corpus's duration distribution** — the optimum minimises the distortion applied
+to a target clip, tiling above it and cropping below it, and T=150 sits +9 frames from
+2021's median of 141. That was offered as "the best explanation consistent with five
+points", explicitly *not* a controlled test. This section states the test.
+
+**The key realisation: it needs no retraining and no new scoring.** The five T variants
+are trained and their `progress` scores are already cached. Partitioning `progress` by
+recording duration and recomputing EER per model within each stratum is a re-read of
+files already on disk.
+
+**Design.** Two arms, kept separate so augmentation is never confounded with T:
+
+| arm | models | T values |
+|---|---|---|
+| augmented | `timepool_T{75,100,150}_aug` | 75, 100, 150 |
+| unaugmented | `T150`, `baseline_T250`, `T400` | 150, 250, 400 |
+
+**Strata: quintiles of `n_frames` over the `progress` partition**, fixed by the duration
+distribution alone — no score or label is consulted in choosing the edges. Each stratum
+reports its own median duration, its trial count, and the EER of every model in its arm.
+
+**Why comparing models *within* a stratum is the right design.** Short clips are harder
+for every system, so EER rises as duration falls for reasons that have nothing to do with
+T. That common factor is shared by all models in a stratum and cancels when they are
+compared against each other. The quantity of interest is therefore **which T wins inside
+each stratum**, never the level.
+
+**Prediction, stated in advance.** If the target-median account is right, the winning T
+should **increase with the stratum's median duration** — short strata favouring the
+shorter windows, the longest stratum favouring the longer ones. The account predicts a
+moving optimum, not a fixed one.
+
+**Refutation condition, also stated in advance.** If the winning T is **the same in every
+stratum** — T=150 in the unaugmented arm and T=150 in the augmented arm regardless of
+duration — then the optimum is not set by target duration and the P9c account is wrong.
+That is a real possibility and the reason the test is worth running: it is the first
+design in this project that can *refute* the account rather than merely be consistent
+with it.
+
+**Boundary.** `progress` only. **No eval application is spent**, and none may be: this
+tests a mechanism, it does not select a system.
 
 ### 9.3 Combine 9.1 and 9.2 — **DONE.** New best, honestly bounded
 

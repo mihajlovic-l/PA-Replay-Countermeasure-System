@@ -606,6 +606,36 @@ def fig_registered_predictions(out: Path) -> Path:
     return _save(fig, out, "18_registered_predictions.png")
 
 
+def fig_duration_strata(out: Path) -> Path:
+    """Does the winning T move with the target clip duration? It does not."""
+    d = pd.read_csv(POSTHOC / "duration_strata.csv")
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.7))
+    cmap = plt.get_cmap("viridis")
+    for ax, arm in zip(axes, ["augmented", "unaugmented"]):
+        a = d[d["arm"] == arm]
+        strata = sorted(a["stratum"].unique())
+        for s in strata:
+            r = a[a["stratum"] == s].sort_values("T")
+            med = r["median_frames"].iloc[0]
+            col = cmap(0.12 + 0.76 * s / max(1, len(strata) - 1))
+            ax.plot(r["T"], r["eer"], marker="o", markersize=4, linewidth=1.5,
+                    color=col, label=f"median {med:.0f} f")
+            best = r.loc[r["eer"].idxmin()]
+            ax.scatter([best["T"]], [best["eer"]], s=90, facecolor="none",
+                       edgecolor=col, linewidth=1.4, zorder=4)
+        ax.set_xlabel("window length T (frames)")
+        ax.set_title(f"{arm} arm")
+        ax.set_xticks(sorted(a["T"].unique()))
+        ax.grid(**GRID)
+    axes[0].set_ylabel("2021 progress EER (%)")
+    axes[1].legend(frameon=False, fontsize=7, title="duration stratum",
+                   title_fontsize=7, loc="upper left")
+    # The circled point on each line is that stratum's best T. The account under test
+    # predicts those circles marching rightwards as the strata get longer.
+    return _save(fig, out, "19_duration_strata.png")
+
+
 FIGURES = {
     "dev-vs-target": fig_dev_vs_target,
     "ci-forest": fig_ci_forest,
@@ -616,6 +646,7 @@ FIGURES = {
     "fusion": fig_fusion,
     "short-clips": fig_short_clip_control,
     "predictions": fig_registered_predictions,
+    "duration-strata": fig_duration_strata,
 }
 
 

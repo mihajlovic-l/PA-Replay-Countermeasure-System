@@ -2685,3 +2685,84 @@ progress EER traces a U.
 
 Artifacts: `results/phase6/timepool_T{100,75}_aug/`, scores in `posthoc_scores.parquet`
 under the `("progress",)` whitelist.
+
+### P10 — The target-median account of T is REFUTED by a test that cost nothing
+
+P9c closed §9.2 with a mechanism: the optimal T is a property of the **target corpus's
+duration distribution**, because T=150 is the setting that neither heavily tiles nor
+heavily crops a 2021 clip, and it sits +9 frames from 2021's median of 141. That was
+labelled at the time as "a mechanistic reading of five points, not a controlled test".
+
+**It was testable all along, for free.** The five T variants are trained and their
+`progress` scores are cached. Partitioning `progress` by recording duration and asking
+which T wins *inside each stratum* is a re-read of files already on disk — no retraining,
+no rescoring, no eval application. The protocol, the prediction and the refutation
+condition were written into `PROJECT_PLAN.md` §9.2.2 before the test ran.
+
+**The prediction:** the winning T should *increase* with the stratum's median duration.
+**The refutation condition:** a winning T that is the same in every stratum.
+
+#### P10a — The optimum does not move
+
+Quintiles of `n_frames` over `progress` (87,048 trials, 67 speakers), two arms kept
+separate so augmentation is never confounded with T:
+
+| stratum | frames | median | T=75 | T=100 | **T=150** | best |
+|---|---|---|---|---|---|---|
+| 0 | 23–111 | 99 | 33.80 | 35.19 | **31.32** | T=150 |
+| 1 | 111–128 | 120 | 31.18 | 29.52 | **28.75** | T=150 |
+| 2 | 128–151 | 141 | 33.78 | 31.17 | **29.56** | T=150 |
+| 3 | 151–190 | 169 | 32.25 | 31.05 | **28.09** | T=150 |
+| 4 | 190–448 | 214 | 33.49 | 32.07 | **29.52** | T=150 |
+
+| stratum | median | **T=150** | T=250 | T=400 | best |
+|---|---|---|---|---|---|
+| 0 | 99 | **33.88** | 34.45 | 38.18 | T=150 |
+| 1 | 120 | **30.57** | 33.12 | 36.37 | T=150 |
+| 2 | 141 | **32.31** | 33.31 | 37.60 | T=150 |
+| 3 | 169 | **30.36** | 30.76 | 35.60 | T=150 |
+| 4 | 214 | 32.97 | **32.15** | 35.20 | T=250 |
+
+**T=150 wins 9 of 10 cells.** The augmented arm is fixed at 150 across the entire
+duration range; the unaugmented arm moves once, in the longest stratum.
+
+#### P10b — The one movement is noise, and the decisive contrast points the wrong way
+
+Speaker-clustered paired bootstrap, B = 1000, 67 speakers, same resample for both
+models in each contrast (`duration_strata_ci.csv`):
+
+- **The single movement is not distinguishable from zero.** T=250 vs T=150 in stratum 4:
+  **−0.71 pp [−2.30, +0.87]**. There is no demonstrated movement of the optimum anywhere.
+- **The decisive contrast is significant and inverted.** In the shortest stratum (median
+  **99 frames**) the account requires T=100 to be near-optimal and T=150 to be penalised
+  for tiling a 99-frame clip 1.5x. Measured: T=100 is **+3.76 pp worse [+2.19, +5.33]**,
+  and T=75 **+2.41 pp worse [+0.86, +4.07]**. Both significant, both opposite to the
+  prediction.
+- **Long windows lose even where they do not tile.** T=400 is significantly worse than
+  T=150 in *every* stratum including the longest, where clips run 190–448 frames and
+  tiling is minimal: **+2.38 pp [+0.63, +4.20]**. If tiling were the mechanism, T=400's
+  penalty should vanish there. It does not.
+
+#### P10c — What survives, and the lesson
+
+**Tiling a short clip is not harmful.** Files of 23–111 frames score *better* padded out
+to 150 than handled at T=100, which barely tiles them at all. The "synthetic periodicity
+no real recording contains" argument is empirically wrong in the direction it was stated.
+
+**T≈150 is a property of the model and the task, not of the corpus.** It holds across a
+2.2x range of target durations, in both arms, and the alignment with 2021's median of 141
+is a **coincidence**. The transferable claim P9c offered — "read the optimal T off the
+target corpus's duration distribution before training" — is withdrawn. What replaces it is
+narrower and honest: the optimum is stable across target durations, so it must be found
+by search, but it need only be found *once*.
+
+**The lesson is about the project's own standards, not about T.** P9b already recorded one
+badly-constructed diagnostic on this axis. The replacement account was then stated with
+appropriate hedging and left untested for the same reason the first one was: the test
+looked expensive. It was not — it was a `groupby` over cached scores, available at any
+moment since Phase 7. **An untested mechanism should be treated as untested until someone
+checks how cheap the test actually is**, and on this axis that check was skipped twice.
+
+Artifacts: `src/duration_strata.py`, `results/phase7/posthoc/duration_strata.csv`,
+`duration_strata_ci.csv`, `19_duration_strata.png`. Protocol in `PROJECT_PLAN.md` §9.2.2.
+**No eval application spent** — `progress` only.
