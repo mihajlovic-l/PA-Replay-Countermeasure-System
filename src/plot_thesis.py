@@ -47,9 +47,75 @@ from . import config, metrics
 # Where the thesis keeps its figures. Both write-up folders are gitignored copies of
 # the template, so this is a path the repo knows about but does not version.
 SLIKE_DIR = config.PROJECT_ROOT / "Thesis paper" / "slike"
+SLIKE_SR_DIR = config.PROJECT_ROOT / "Diplomski rad" / "slike"
 
 PREREG = config.PHASE7_PREREG_DIR
 POSTHOC = config.PHASE7_POSTHOC_DIR
+
+# --- language -------------------------------------------------------------------
+# The submitted thesis is in Serbian Cyrillic, so every figure needs a second set of
+# labels. Rather than fork the plotting code, each user-visible string is wrapped in
+# _t() and looked up here; anything absent falls through unchanged, which is exactly
+# what the terms that stay English need (ASVspoof, EER, min t-DCF, front-end, the
+# system tags like flatten_T400, the partition names, the condition codes).
+# Serbian files are written as <name>_srp.png, leaving the English originals alone.
+LANG = "en"
+
+SR = {
+    # axes shared by several figures
+    "EER (%)": "EER (%)",
+    "EER (%) — out of domain": "EER (%) - ван домена",
+    "EER (%) — in domain": "EER (%) - у домену",
+    "2019 dev EER (%) — in domain": "2019 dev EER (%) - у домену",
+    "2021 eval EER (%) — real replay": "2021 eval EER (%) - стварна репродукција",
+    "2021 progress EER (%)": "2021 progress EER (%)",
+    "2019 dev EER (%)": "2019 dev EER (%)",
+    "window length T (frames)": "дужина прозора T (оквира)",
+    "clean fraction of the training pool": "удео чистих података у скупу за обуку",
+    "2021 progress (out of domain)": "2021 progress (ван домена)",
+    "2019 dev (in domain)": "2019 dev (у домену)",
+    "out of domain": "ван домена",
+    "in domain": "у домену",
+    "augmented": "аугментовано",
+    "unaugmented": "неаугментовано",
+    "augmented arm": "аугментовани режим",
+    "unaugmented arm": "неаугментовани режим",
+    "duration stratum": "слој трајања",
+    "chance": "случајно",
+    " chance": " случајно",
+    # confidence intervals
+    "EER (%) with 95% confidence interval": "EER (%) са 95% интервалом поверења",
+    "speaker-clustered (67 speakers)": "груписано по говорницима (67 говорника)",
+    "trial-level (721,332 trials)": "на нивоу покушаја (721.332 покушаја)",
+    "paired difference in EER (percentage points), 95% CI":
+        "упарена разлика у EER (процентни поени), 95% CI",
+    "excludes zero": "искључује нулу",
+    "spans zero": "обухвата нулу",
+    # hidden tracks
+    "real replay\n(matched D4/d4)": "стварна репродукција\n(упарено D4/d4)",
+    "simulated replay": "симулирана репродукција",
+    "non-speech removed": "без ванговорних сегмената",
+    # DET
+    "False acceptance rate — spoof accepted (%)": "стопа лажног прихватања (%)",
+    "False rejection rate — bonafide rejected (%)": "стопа лажног одбијања (%)",
+    # condition breakdown: the factor codes stay, the names are spelled out. The
+    # mapping was read off the numbers quoted in the results chapter, e.g. s4 is the
+    # 47.62% replay device and r3/r5 are the 52.45%/27.95% attacker rooms.
+    "room": "просторија снимања (room)",
+    "mic": "микрофон верификације (mic)",
+    "dist": "растојање нападача од верификације (dist)",
+    "r": "нападачева просторија (r)",
+    "m": "нападачев микрофон (m)",
+    "s": "нападачев уређај за репродукцију (s)",
+    "c": "растојање нападача од говорника (c)",
+    "within-group": "унутар групе",
+    "pooled-bonafide": "обједињени истински",
+}
+
+
+def _t(s: str) -> str:
+    """User-visible string, in whichever language this run is drawing."""
+    return SR.get(s, s) if LANG == "sr" else s
 
 # One palette across every figure, so a colour means the same thing throughout.
 C_OURS = "#2f6f9f"        # systems built for this thesis
@@ -95,6 +161,8 @@ def _colour(system: str) -> str:
 
 
 def _save(fig, out: Path, name: str) -> Path:
+    if LANG == "sr":
+        name = name.replace(".png", "_srp.png")
     path = out / name
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -293,16 +361,17 @@ def fig_dev_vs_target(out: Path) -> Path:
     # of magnitude, and a straight line in linear x would bend across the plot.
     z = np.polyfit(np.log10(lcnn["dev"]), lcnn["target"], 1)
     xs = np.logspace(np.log10(lcnn["dev"].min()), np.log10(lcnn["dev"].max()), 50)
+    # Short label on purpose: the full statistic is in the prose, and the long form
+    # used to run across the frame and collide with the MFCC-SVM point label.
     ax.plot(xs, np.polyval(z, np.log10(xs)), color=C_ZERO, linewidth=1.0,
-            linestyle="--", zorder=2,
-            label=f"CQT-LCNN trend (Spearman ρ = {rho:.2f}, p = 0.148)")
+            linestyle="--", zorder=2, label=f"CQT-LCNN  ρ = {rho:.2f}")
 
-    ax.set_xlabel("2019 dev EER (%) — in domain")
-    ax.set_ylabel("2021 eval EER (%) — real replay")
+    ax.set_xlabel(_t("2019 dev EER (%) — in domain"))
+    ax.set_ylabel(_t("2021 eval EER (%) — real replay"))
     ax.set_xscale("log")
     ax.set_xlim(0.6, 30)
     ax.grid(**GRID)
-    ax.legend(loc="upper left", frameon=False)
+    ax.legend(loc="lower left", frameon=False)
     return _save(fig, out, "10_dev_vs_2021.png")
 
 
@@ -327,22 +396,50 @@ def fig_ci_forest(out: Path) -> Path:
                    linewidth=0.7, zorder=4)
 
     ax.axvline(50, color=C_ZERO, linestyle=":", linewidth=1.0)
-    ax.text(50, -0.75, " chance", color=C_ZERO, fontsize=7, va="center")
+    ax.text(50, -0.75, _t(" chance"), color=C_ZERO, fontsize=7, va="center")
     ax.set_yticks(y, order, fontsize=7.5)
     ax.invert_yaxis()
-    ax.set_xlabel("EER (%) with 95% confidence interval")
+    ax.set_xlabel(_t("EER (%) with 95% confidence interval"))
     ax.grid(axis="x", **GRID)
-    ax.plot([], [], color=C_OURS, linewidth=2.6, label="speaker-clustered (67 speakers)")
+    ax.plot([], [], color=C_OURS, linewidth=2.6, label=_t("speaker-clustered (67 speakers)"))
     ax.plot([], [], color="black", linewidth=5.0, alpha=0.75,
-            label="trial-level (721,332 trials)")
+            label=_t("trial-level (721,332 trials)"))
     ax.legend(loc="upper right", frameon=False)
     return _save(fig, out, "11_ci_forest.png")
+
+
+# The nine comparisons fixed in writing before the held-out set was scored, with a
+# short label for each. The figure is referenced from the pre-registered section, so
+# it shows only these: folding the post-hoc differences in beside them would blur the
+# separation the whole evaluation protocol rests on. Their numbers are quoted in the
+# post-hoc prose instead.
+REGISTERED_COMPARISONS = {
+    "central claim: CQT-LCNN vs MFCC-SVM":
+        "средишња тврдња: CQT-LCNN и MFCC-SVM",
+    "headline: best vs best official baseline":
+        "главно: најбољи и најјачи референтни",
+    "front-end: CQT vs LFCC (both unaugmented)":
+        "front-end: CQT и LFCC (без аугментације)",
+    "T axis: 150 vs 400":
+        "оса T: 150 и 400",
+    "head: flatten vs timepool at T=400":
+        "излазни степен: flatten и timepool (T=400)",
+    "pred 1: shorter T transfers better":
+        "предвиђање 1: краћи прозор",
+    "pred 2a: mild waveform augmentation":
+        "предвиђање 2a: блага аугментација",
+    "pred 2b: aggressive waveform augmentation":
+        "предвиђање 2b: јака аугментација",
+    "pred 3: CMVN transfers better":
+        "предвиђање 3: CMVN",
+}
 
 
 def fig_paired_differences(out: Path) -> Path:
     """Every declared comparison as the CI of the paired difference."""
     d = pd.read_csv(POSTHOC / "bootstrap_ci_comparisons.csv")
     d = d[d["scheme"] == "speaker-clustered"].copy()
+    d = d[d["comparison"].isin(REGISTERED_COMPARISONS)]
     d = d.sort_values("eer_diff").reset_index(drop=True)
 
     fig, ax = plt.subplots(figsize=(6.6, 0.36 * len(d) + 1.4))
@@ -355,14 +452,14 @@ def fig_paired_differences(out: Path) -> Path:
                    linewidth=1.1, zorder=3)
     ax.axvline(0, color=C_ZERO, linewidth=1.1, zorder=1)
 
-    labels = [c.split(":")[0] + ": " + c.split(":", 1)[1].strip()
-              if ":" in c else c for c in d["comparison"]]
-    ax.set_yticks(np.arange(len(d)), labels, fontsize=7)
+    labels = [REGISTERED_COMPARISONS[c] if LANG == "sr" else c
+              for c in d["comparison"]]
+    ax.set_yticks(np.arange(len(d)), labels, fontsize=7.5)
     ax.invert_yaxis()
-    ax.set_xlabel("paired difference in EER (percentage points), 95% CI")
+    ax.set_xlabel(_t("paired difference in EER (percentage points), 95% CI"))
     ax.grid(axis="x", **GRID)
-    ax.plot([], [], color=C_OURS, linewidth=2.4, label="excludes zero")
-    ax.plot([], [], color=C_OFFICIAL, linewidth=2.4, label="spans zero")
+    ax.plot([], [], color=C_OURS, linewidth=2.4, label=_t("excludes zero"))
+    ax.plot([], [], color=C_OFFICIAL, linewidth=2.4, label=_t("spans zero"))
     ax.legend(loc="lower left", frameon=False)
     return _save(fig, out, "12_paired_differences.png")
 
@@ -393,27 +490,29 @@ def fig_hidden_tracks(out: Path) -> Path:
     # the labels are spread apart and joined back to their line by a hairline.
     ends = [float(d.loc[t, cols[-1]]) for t in tags]
     span = max(ends) - min(ends)
-    for tag, y_pt, y_lab in zip(tags, ends, _declutter(ends, span * 0.055)):
+    # 0.075 rather than 0.055: at the tighter gap the five systems bunched in the
+    # 50-54% band still overprinted each other.
+    for tag, y_pt, y_lab in zip(tags, ends, _declutter(ends, span * 0.075)):
         col = _colour(tag)
         ax.plot([xs[-1], xs[-1] + 0.10], [y_pt, y_lab], color=col,
                 linewidth=0.6, alpha=0.6, zorder=2)
         ax.text(xs[-1] + 0.13, y_lab, tag, fontsize=7, color=col, va="center")
 
     ax.axhline(50, color=C_ZERO, linestyle=":", linewidth=1.0)
-    ax.text(-0.05, 50.6, "chance", color=C_ZERO, fontsize=7)
-    ax.set_xticks(xs, ["real replay\n(matched D4/d4)", "simulated replay",
-                       "non-speech removed"])
+    ax.text(-0.05, 50.6, _t("chance"), color=C_ZERO, fontsize=7)
+    ax.set_xticks(xs, [_t("real replay\n(matched D4/d4)"), _t("simulated replay"),
+                       _t("non-speech removed")])
     ax.set_xlim(-0.15, len(cols) - 1 + 0.95)
-    ax.set_ylabel("EER (%)")
+    ax.set_ylabel(_t("EER (%)"))
     ax.grid(axis="y", **GRID)
     return _save(fig, out, "13_hidden_tracks.png")
 
 
 def _axis_panel(ax, sub, xcol, xlabel, logx=False):
     ax.plot(sub[xcol], sub["progress_eer"], marker="o", color=C_AUG,
-            linewidth=1.8, markersize=5, label="2021 progress (out of domain)")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("EER (%) — out of domain", color=C_AUG)
+            linewidth=1.8, markersize=5, label=_t("2021 progress (out of domain)"))
+    ax.set_xlabel(_t(xlabel))
+    ax.set_ylabel(_t("EER (%) — out of domain"), color=C_AUG)
     ax.tick_params(axis="y", labelcolor=C_AUG)
     if logx:
         ax.set_xscale("log")
@@ -422,8 +521,8 @@ def _axis_panel(ax, sub, xcol, xlabel, logx=False):
     twin.spines["right"].set_visible(True)
     twin.plot(sub[xcol], sub["dev_eer"], marker="s", color=C_OURS,
               linewidth=1.4, markersize=4, linestyle="--",
-              label="2019 dev (in domain)")
-    twin.set_ylabel("EER (%) — in domain", color=C_OURS)
+              label=_t("2019 dev (in domain)"))
+    twin.set_ylabel(_t("EER (%) — in domain"), color=C_OURS)
     twin.tick_params(axis="y", labelcolor=C_OURS)
     return twin
 
@@ -439,14 +538,8 @@ def fig_dose_axis(out: Path) -> Path:
     ax.set_xscale("log")
     ax.set_xticks(sub["p_clean"], [f"{v:g}" for v in sub["p_clean"]])
 
-    aug = sub[sub["p_clean"] < 1.0]
-    ax.annotate(f"{aug['progress_eer'].max() - aug['progress_eer'].min():.3f} pp"
-                "\nacross an 8× dose range",
-                xy=(aug["p_clean"].iloc[-1], aug["progress_eer"].iloc[-1]),
-                xytext=(0.42, 0.30), textcoords="axes fraction", fontsize=7.5,
-                color=C_AUG, ha="left",
-                arrowprops=dict(arrowstyle="->", color=C_AUG, linewidth=0.8))
-
+    # No annotation: the 0.103 pp span across the 8x dose range is stated in the
+    # results prose, and a sentence drawn on the plot only repeats it.
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = twin.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, loc="center right", frameon=False)
@@ -463,30 +556,27 @@ def fig_window_axis(out: Path) -> Path:
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(7.4, 3.6))
 
     ax.plot(aug["n_frames"], aug["progress_eer"], marker="o", color=C_AUG,
-            linewidth=1.8, markersize=5, label="augmented")
+            linewidth=1.8, markersize=5, label=_t("augmented"))
     ax.plot(clean["n_frames"], clean["progress_eer"], marker="s", color=C_OURS,
-            linewidth=1.4, markersize=4.5, linestyle="--", label="unaugmented")
+            linewidth=1.4, markersize=4.5, linestyle="--", label=_t("unaugmented"))
+    # The circle marks the minimum; that it is bracketed on both sides is the point
+    # of the panel and is said in the prose, so no text is drawn here.
     best = aug.loc[aug["progress_eer"].idxmin()]
     ax.scatter([best["n_frames"]], [best["progress_eer"]], s=120, facecolor="none",
                edgecolor=C_ZERO, linewidth=1.2, zorder=4)
-    ax.annotate("minimum, now bracketed\non both sides",
-                xy=(best["n_frames"], best["progress_eer"]),
-                xytext=(0.52, 0.16), textcoords="axes fraction", fontsize=7.5,
-                color=C_ZERO,
-                arrowprops=dict(arrowstyle="->", color=C_ZERO, linewidth=0.8))
-    ax.set_xlabel("window length T (frames)")
-    ax.set_ylabel("2021 progress EER (%)")
-    ax.set_title("out of domain")
+    ax.set_xlabel(_t("window length T (frames)"))
+    ax.set_ylabel(_t("2021 progress EER (%)"))
+    ax.set_title(_t("out of domain"))
     ax.grid(**GRID)
     ax.legend(frameon=False, loc="upper left")
 
     ax2.plot(aug["n_frames"], aug["dev_eer"], marker="o", color=C_AUG,
-             linewidth=1.8, markersize=5, label="augmented")
+             linewidth=1.8, markersize=5, label=_t("augmented"))
     ax2.plot(clean["n_frames"], clean["dev_eer"], marker="s", color=C_OURS,
-             linewidth=1.4, markersize=4.5, linestyle="--", label="unaugmented")
-    ax2.set_xlabel("window length T (frames)")
-    ax2.set_ylabel("2019 dev EER (%)")
-    ax2.set_title("in domain")
+             linewidth=1.4, markersize=4.5, linestyle="--", label=_t("unaugmented"))
+    ax2.set_xlabel(_t("window length T (frames)"))
+    ax2.set_ylabel(_t("2019 dev EER (%)"))
+    ax2.set_title(_t("in domain"))
     ax2.grid(**GRID)
     ax2.legend(frameon=False)
     return _save(fig, out, "15_window_axis.png")
@@ -619,24 +709,112 @@ def fig_duration_strata(out: Path) -> Path:
             r = a[a["stratum"] == s].sort_values("T")
             med = r["median_frames"].iloc[0]
             col = cmap(0.12 + 0.76 * s / max(1, len(strata) - 1))
+            lab = (f"медијана {med:.0f} окв." if LANG == "sr"
+                   else f"median {med:.0f} f")
             ax.plot(r["T"], r["eer"], marker="o", markersize=4, linewidth=1.5,
-                    color=col, label=f"median {med:.0f} f")
+                    color=col, label=lab)
             best = r.loc[r["eer"].idxmin()]
             ax.scatter([best["T"]], [best["eer"]], s=90, facecolor="none",
                        edgecolor=col, linewidth=1.4, zorder=4)
-        ax.set_xlabel("window length T (frames)")
-        ax.set_title(f"{arm} arm")
+        ax.set_xlabel(_t("window length T (frames)"))
+        ax.set_title(_t(f"{arm} arm"))
         ax.set_xticks(sorted(a["T"].unique()))
         ax.grid(**GRID)
-    axes[0].set_ylabel("2021 progress EER (%)")
-    axes[1].legend(frameon=False, fontsize=7, title="duration stratum",
+    axes[0].set_ylabel(_t("2021 progress EER (%)"))
+    axes[1].legend(frameon=False, fontsize=7, title=_t("duration stratum"),
                    title_fontsize=7, loc="upper left")
     # The circled point on each line is that stratum's best T. The account under test
     # predicts those circles marching rightwards as the strata get longer.
     return _save(fig, out, "19_duration_strata.png")
 
 
+def fig_det_curves(out: Path) -> Path:
+    """DET curves for the pre-registered pass.
+
+    Rebuilt here rather than in report_2021, which owns the frozen pre-registered
+    directory and would have to re-read the corpus-side parquets to redraw one
+    picture. Everything needed is already on disk: the exported per-system
+    score.txt files (the format published precisely so any number can be recomputed
+    without the corpus) plus the manifest for the labels.
+    """
+    from scipy.stats import norm
+    from sklearn.metrics import roc_curve
+
+    man = pd.read_parquet(config.MANIFESTS_DIR / "pa2021_cm.parquet",
+                          columns=["filename", "label", "partition"])
+    man = man[man["partition"] == config.PA2021_REPORTED_PARTITION]
+    y = (man["label"] == "bonafide").to_numpy().astype(int)
+    idx = man["filename"]
+
+    def read_scores(path: Path) -> np.ndarray:
+        s = pd.read_csv(path, sep=r"\s+", names=["filename", "score"])
+        return s.set_index("filename")["score"].reindex(idx).to_numpy()
+
+    ours = [p for p in sorted((PREREG / "scores").glob("*.score.txt"))]
+    fig, ax = plt.subplots(figsize=(5.6, 5.6))
+    ticks = np.array([0.01, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8])
+
+    def draw(name, sc, **kw):
+        ok = ~np.isnan(sc)
+        fpr, tpr, _ = roc_curve(y[ok], sc[ok])
+        fnr = 1 - tpr
+        m = (fpr > 0) & (fnr > 0)
+        ax.plot(norm.ppf(fpr[m]), norm.ppf(fnr[m]), label=name, **kw)
+
+    for p in tqdm(ours, desc="DET", unit="sys", leave=False):
+        tag = p.name.replace(".score.txt", "")
+        draw(tag, read_scores(p), lw=1.6, color=_colour(tag), alpha=0.9)
+    for name, path in config.PA2021_BASELINE_SCORE_FILES.items():
+        if path.exists():
+            draw(f"{name} (official)", read_scores(path), lw=1.2, ls="--",
+                 color=C_OFFICIAL, alpha=0.75)
+
+    lo = min(ax.get_xlim()[0], ax.get_ylim()[0])
+    hi = max(ax.get_xlim()[1], ax.get_ylim()[1])
+    ax.plot([lo, hi], [lo, hi], c="k", lw=0.7, alpha=0.35, zorder=0)
+    ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
+    ax.set_xticks(norm.ppf(ticks), [f"{t*100:g}" for t in ticks])
+    ax.set_yticks(norm.ppf(ticks), [f"{t*100:g}" for t in ticks])
+    ax.set_xlabel(_t("False acceptance rate — spoof accepted (%)"))
+    ax.set_ylabel(_t("False rejection rate — bonafide rejected (%)"))
+    ax.grid(**GRID)
+    ax.legend(fontsize=6.5, loc="upper right", frameon=False, ncol=1)
+    return _save(fig, out, "08_det_curves_2021.png")
+
+
+def fig_condition_breakdown(out: Path) -> Path:
+    """Error rate per physical attack condition, from the frozen breakdown table.
+
+    Laid out 2x4 rather than the original 1x7: across an A4 text block seven panels
+    in a row leave each about 2.4 cm wide, which puts the level ticks below legible
+    size. The factor codes stay as they are in the metadata, with the name spelled
+    out beside them.
+    """
+    d = pd.read_csv(PREREG / "condition_breakdown.csv")
+    factors = list(dict.fromkeys(d["factor"]))
+
+    ncol = 4
+    nrow = int(np.ceil(len(factors) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.05 * ncol, 3.0 * nrow),
+                             squeeze=False)
+    flat = [a for row in axes for a in row]
+    for ax, f in zip(flat, factors):
+        g = d[d["factor"] == f]
+        within = g["convention"].iloc[0] == "within-group"
+        ax.bar(g["level"].astype(str), g["eer"] * 100,
+               color=C_OURS if within else C_AUG)
+        ax.set_title(f"{_t(f)}\n({_t(g['convention'].iloc[0])})", fontsize=8.5)
+        ax.set_ylabel(_t("EER (%)"))
+        ax.tick_params(axis="x", labelsize=7.5)
+        ax.grid(axis="y", **GRID)
+    for ax in flat[len(factors):]:
+        ax.axis("off")
+    return _save(fig, out, "09_condition_breakdown.png")
+
+
 FIGURES = {
+    "det": fig_det_curves,
+    "conditions": fig_condition_breakdown,
     "dev-vs-target": fig_dev_vs_target,
     "ci-forest": fig_ci_forest,
     "paired-diffs": fig_paired_differences,
@@ -661,13 +839,20 @@ def main() -> None:
     ap.add_argument("--force", action="store_true",
                     help="recompute the persisted intermediate tables")
     ap.add_argument("--no-thesis-copy", action="store_true",
-                    help="skip mirroring the PNGs into Thesis paper/slike/")
+                    help="skip mirroring the PNGs into the write-up's slike/")
+    ap.add_argument("--lang", choices=("en", "sr"), default="en",
+                    help="label language; 'sr' writes <name>_srp.png and mirrors "
+                         "into Diplomski rad/slike/ instead")
     args = ap.parse_args()
 
+    global LANG
+    LANG = args.lang
+    slike = SLIKE_SR_DIR if LANG == "sr" else SLIKE_DIR
+
     args.out.mkdir(parents=True, exist_ok=True)
-    print(f"figures -> {args.out}")
+    print(f"figures ({LANG}) -> {args.out}")
     if not args.no_thesis_copy:
-        SLIKE_DIR.mkdir(parents=True, exist_ok=True)
+        slike.mkdir(parents=True, exist_ok=True)
 
     if args.force:
         build_axis_sweeps(force=True)
@@ -679,9 +864,9 @@ def main() -> None:
         bar.set_postfix_str(name)
         path = FIGURES[name](args.out)
         msg = f"  {name:<14} -> {path.name}"
-        if not args.no_thesis_copy and args.out != SLIKE_DIR:
-            shutil.copyfile(path, SLIKE_DIR / path.name)
-            msg += "  (mirrored to Thesis paper/slike/)"
+        if not args.no_thesis_copy and args.out != slike:
+            shutil.copyfile(path, slike / path.name)
+            msg += f"  (mirrored to {slike.name}/)"
         bar.write(msg)
 
 

@@ -11,6 +11,7 @@ and gender balance per split, and an attack-condition distribution sanity check.
 """
 from __future__ import annotations
 
+import argparse
 import random
 import sys
 
@@ -30,6 +31,44 @@ EDA_DIR.mkdir(parents=True, exist_ok=True)
 
 sns.set_theme(style="whitegrid")
 RNG_SEED = config.RANDOM_SEED
+
+# --- language -------------------------------------------------------------------
+# The submitted thesis is Serbian Cyrillic; --lang sr redraws the figures it uses
+# with Serbian labels and writes them as <name>_srp.png, leaving the English
+# originals in place. Terms that stay English (MFCC, CQT, STFT, PA, the partition
+# names, speaker and file ids) simply have no entry here and fall through.
+LANG = "en"
+
+SR = {
+    "Duration (s)": "трајање (s)",
+    "Time (s)": "време (s)",
+    "Waveform": "сигнал у временском домену",
+    "STFT spectrogram (Hz)": "STFT спектрограм (Hz)",
+    "CQTgram": "CQT спектрограм",
+    "MFCC coefficient": "MFCC коефицијент",
+    "Bonafide": "истински",
+    "Spoof": "лажиран",
+    "bonafide": "истински",
+    "spoof": "лажиран",
+    "label": "класа",
+    "dataset": "корпус",
+    "2019 PA (train pool)": "2019 PA (скуп за обуку)",
+    "2021 PA eval": "2021 PA eval",
+    "2019 PA duration by label": "2019 PA трајање по класи",
+    "2019 vs. 2021 duration distribution (sampled)":
+        "расподела трајања, 2019 наспрам 2021",
+    "Count": "број снимака",
+    "Density": "густина",
+}
+
+
+def _t(s: str) -> str:
+    return SR.get(s, s) if LANG == "sr" else s
+
+
+def _fname(name: str) -> str:
+    """Output filename for the language being drawn."""
+    return name.replace(".png", "_srp.png") if LANG == "sr" else name
 
 
 # ---------------------------------------------------------------------------
@@ -132,41 +171,73 @@ def plot_class_balance_train_dev(train_df: pd.DataFrame, dev_df: pd.DataFrame):
 # 3. Duration histograms
 # ---------------------------------------------------------------------------
 
-def sample_durations(df: pd.DataFrame, n_per_label: int, seed: int = RNG_SEED) -> pd.DataFrame:
+def sample_durations(df: pd.DataFrame, n_per_label: int, seed: int = RNG_SEED,
+                     cache: str | None = None) -> pd.DataFrame:
+    """Durations of a fixed random sample, from the file headers.
+
+    Cached to EDA/ because it is the one expensive step in this module -- a few
+    thousand header reads off the corpus drive -- and redrawing the same figure in
+    another language should not pay for it twice. The sample is seeded, so the
+    cache holds exactly what a re-read would produce.
+    """
+    if cache is not None:
+        path = EDA_DIR / cache
+        if path.exists():
+            return pd.read_csv(path)
     rows = []
     for label, grp in df.groupby("label"):
         sample = grp.sample(n=min(n_per_label, len(grp)), random_state=seed)
-        for path in tqdm(sample["filepath"], desc=f"duration:{label}", leave=False):
-            info = sf.info(path)
+        for p in tqdm(sample["filepath"], desc=f"duration:{label}", leave=False):
+            info = sf.info(p)
             rows.append({"label": label, "duration_sec": info.frames / info.samplerate})
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if cache is not None:
+        out.to_csv(EDA_DIR / cache, index=False)
+    return out
 
 
 def plot_duration_histograms(pool_after: pd.DataFrame, pa2021: pd.DataFrame):
-    dur_2019 = sample_durations(pool_after, n_per_label=1500)
-    dur_2019["dataset"] = "2019 PA (train pool)"
+    dur_2019 = sample_durations(pool_after, n_per_label=1500,
+                                cache="03_durations_2019.csv")
+    dur_2019["dataset"] = _t("2019 PA (train pool)")
 
     pa2021_eval = pa2021[pa2021["partition"] == config.PA2021_REPORTED_PARTITION]
-    dur_2021 = sample_durations(pa2021_eval, n_per_label=1500)
-    dur_2021["dataset"] = "2021 PA eval"
+    dur_2021 = sample_durations(pa2021_eval, n_per_label=1500,
+                                cache="03_durations_2021.csv")
+    dur_2021["dataset"] = _t("2021 PA eval")
+
+    for d in (dur_2019, dur_2021):
+        d["label"] = d["label"].map(_t)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
     sns.histplot(data=dur_2019, x="duration_sec", hue="label", bins=40, ax=axes[0], element="step")
-    axes[0].set_title(f"2019 PA duration by label (n={len(dur_2019)} sampled)")
-    axes[0].set_xlabel("Duration (s)")
+    axes[0].set_title(_t("2019 PA duration by label")
+                      if LANG == "sr" else
+                      f"2019 PA duration by label (n={len(dur_2019)} sampled)")
+    axes[0].set_xlabel(_t("Duration (s)"))
+    if axes[0].get_legend():
+        axes[0].get_legend().set_title(_t("label"))
 
     combined = pd.concat([dur_2019, dur_2021], ignore_index=True)
     sns.histplot(data=combined, x="duration_sec", hue="dataset", bins=40, ax=axes[1], element="step", stat="density", common_norm=False)
-    axes[1].set_title("2019 vs. 2021 duration distribution (sampled)")
-    axes[1].set_xlabel("Duration (s)")
+    axes[1].set_title(_t("2019 vs. 2021 duration distribution (sampled)"))
+    axes[1].set_xlabel(_t("Duration (s)"))
+    if axes[1].get_legend():
+        axes[1].get_legend().set_title(_t("dataset"))
+    axes[0].set_ylabel(_t("Count"))
+    axes[1].set_ylabel(_t("Density"))
 
     fig.tight_layout()
-    fig.savefig(EDA_DIR / "03_duration_histograms.png", dpi=150)
+    fig.savefig(EDA_DIR / _fname("03_duration_histograms.png"), dpi=150)
     plt.close(fig)
 
-    summary = combined.groupby("dataset")["duration_sec"].describe()[["mean", "50%", "min", "max"]]
-    summary.to_csv(EDA_DIR / "03_duration_summary.csv")
+    # Canonical result, written only by the English run: a --lang sr pass would
+    # otherwise translate the dataset names inside a persisted results file, which
+    # is a figure concern leaking somewhere it does not belong.
+    if LANG != "sr":
+        summary = combined.groupby("dataset")["duration_sec"].describe()[["mean", "50%", "min", "max"]]
+        summary.to_csv(EDA_DIR / "03_duration_summary.csv")
 
 
 # ---------------------------------------------------------------------------
@@ -202,17 +273,17 @@ def plot_waveform_spectrogram_cqt(bonafide_row, spoof_row):
 
     fig, axes = plt.subplots(3, 2, figsize=(12, 10))
     titles = [
-        f"Bonafide  ({bonafide_row['speaker_id']}, {bonafide_row['filename']})",
-        f"Spoof  ({spoof_row['speaker_id']}, attack {spoof_row['attack_id']}, {spoof_row['filename']})",
+        f"{_t('Bonafide')}  ({bonafide_row['speaker_id']}, {bonafide_row['filename']})",
+        f"{_t('Spoof')}  ({spoof_row['speaker_id']}, {spoof_row['attack_id']}, {spoof_row['filename']})",
     ]
 
     for col, (y, title) in enumerate(zip([y_bona, y_spoof], titles)):
         t = np.arange(len(y)) / config.SAMPLE_RATE
         axes[0, col].plot(t, y, linewidth=0.5)
         axes[0, col].set_title(title)
-        axes[0, col].set_xlabel("Time (s)")
+        axes[0, col].set_xlabel(_t("Time (s)"))
         if col == 0:
-            axes[0, col].set_ylabel("Waveform")
+            axes[0, col].set_ylabel(_t("Waveform"))
 
         stft = librosa.stft(y, n_fft=config.MFCC_N_FFT, hop_length=config.MFCC_HOP_LENGTH)
         stft_db = librosa.amplitude_to_db(np.abs(stft), ref=np.max)
@@ -221,7 +292,7 @@ def plot_waveform_spectrogram_cqt(bonafide_row, spoof_row):
             x_axis="time", y_axis="hz", ax=axes[1, col],
         )
         if col == 0:
-            axes[1, col].set_ylabel("STFT spectrogram (Hz)")
+            axes[1, col].set_ylabel(_t("STFT spectrogram (Hz)"))
 
         cqt = librosa.cqt(
             y, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
@@ -233,11 +304,14 @@ def plot_waveform_spectrogram_cqt(bonafide_row, spoof_row):
             x_axis="time", y_axis="cqt_hz", bins_per_octave=config.CQT_BINS_PER_OCTAVE, ax=axes[2, col],
         )
         if col == 0:
-            axes[2, col].set_ylabel("CQTgram")
+            axes[2, col].set_ylabel(_t("CQTgram"))
 
-    fig.suptitle("Waveform / STFT spectrogram / CQTgram: bonafide vs. replayed speech (same speaker)")
+    # No suptitle in Serbian: the Typst caption already names the figure, and a
+    # sentence across the top only repeats it.
+    if LANG != "sr":
+        fig.suptitle("Waveform / STFT spectrogram / CQTgram: bonafide vs. replayed speech (same speaker)")
     fig.tight_layout()
-    fig.savefig(EDA_DIR / "04_waveform_spectrogram_cqt.png", dpi=150)
+    fig.savefig(EDA_DIR / _fname("04_waveform_spectrogram_cqt.png"), dpi=150)
     plt.close(fig)
 
 
@@ -250,7 +324,7 @@ def plot_mfcc_vs_cqt(bonafide_row, spoof_row):
     y_spoof = _load_audio(spoof_row["filepath"])
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 7))
-    cols = [("Bonafide", y_bona), ("Spoof", y_spoof)]
+    cols = [(_t("Bonafide"), y_bona), (_t("Spoof"), y_spoof)]
 
     for col, (label, y) in enumerate(cols):
         mfcc = librosa.feature.mfcc(
@@ -264,9 +338,11 @@ def plot_mfcc_vs_cqt(bonafide_row, spoof_row):
             mfcc_disp, sr=config.SAMPLE_RATE, hop_length=config.MFCC_HOP_LENGTH,
             x_axis="time", cmap="coolwarm", vmin=-3, vmax=3, ax=axes[0, col],
         )
-        axes[0, col].set_title(f"{label}: MFCC ({config.N_MFCC} coeffs, z-scored per coeff for display)")
+        axes[0, col].set_title(
+            f"{label}: MFCC ({config.N_MFCC} коефицијената)" if LANG == "sr"
+            else f"{label}: MFCC ({config.N_MFCC} coeffs, z-scored per coeff for display)")
         axes[0, col].set_yticks(range(0, config.N_MFCC, 4))
-        axes[0, col].set_ylabel("MFCC coefficient")
+        axes[0, col].set_ylabel(_t("MFCC coefficient"))
 
         cqt = librosa.cqt(
             y, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
@@ -277,11 +353,14 @@ def plot_mfcc_vs_cqt(bonafide_row, spoof_row):
             cqt_db, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
             x_axis="time", y_axis="cqt_hz", bins_per_octave=config.CQT_BINS_PER_OCTAVE, ax=axes[1, col],
         )
-        axes[1, col].set_title(f"{label}: CQTgram ({config.CQT_N_BINS} bins)")
+        axes[1, col].set_title(
+            f"{label}: CQT ({config.CQT_N_BINS} опсега)" if LANG == "sr"
+            else f"{label}: CQTgram ({config.CQT_N_BINS} bins)")
 
-    fig.suptitle("MFCC vs. CQT: does the replay fingerprint survive the front-end?")
+    if LANG != "sr":
+        fig.suptitle("MFCC vs. CQT: does the replay fingerprint survive the front-end?")
     fig.tight_layout()
-    fig.savefig(EDA_DIR / "05_mfcc_vs_cqt.png", dpi=150)
+    fig.savefig(EDA_DIR / _fname("05_mfcc_vs_cqt.png"), dpi=150)
     plt.close(fig)
 
 
@@ -350,38 +429,58 @@ def plot_attack_condition_distribution(train_df: pd.DataFrame, dev_df: pd.DataFr
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # Windows console cp1252 can't print the Cyrillic project path
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--lang", choices=("en", "sr"), default="en",
+                    help="label language; 'sr' writes <name>_srp.png alongside the "
+                         "English originals")
+    ap.add_argument("--only", nargs="+", type=int, choices=range(1, 8), metavar="N",
+                    help="generate only these plot numbers (1-7); the Serbian thesis "
+                         "uses 3, 4 and 5")
+    args = ap.parse_args()
+
+    global LANG
+    LANG = args.lang
+    want = set(args.only) if args.only else set(range(1, 8))
+
     random.seed(RNG_SEED)
     np.random.seed(RNG_SEED)
 
-    print("Loading manifests/splits...")
+    print(f"Loading manifests/splits... (lang={LANG})")
     cm_before, pool_after, train_df, dev_df, pa2021 = load_data()
-    gender_map = build_gender_map()
 
-    print("Plot 1/7: class balance before/after enrichment")
-    plot_class_balance_before_after(cm_before, pool_after)
+    if 1 in want:
+        print("Plot 1/7: class balance before/after enrichment")
+        plot_class_balance_before_after(cm_before, pool_after)
 
-    print("Plot 2/7: class balance train_2019 vs dev_2019")
-    plot_class_balance_train_dev(train_df, dev_df)
+    if 2 in want:
+        print("Plot 2/7: class balance train_2019 vs dev_2019")
+        plot_class_balance_train_dev(train_df, dev_df)
 
-    print("Plot 3/7: duration histograms (2019 by label, 2019 vs 2021)")
-    plot_duration_histograms(pool_after, pa2021)
+    if 3 in want:
+        print("Plot 3/7: duration histograms (2019 by label, 2019 vs 2021)")
+        plot_duration_histograms(pool_after, pa2021)
 
-    print("Picking a same-speaker bonafide/spoof example pair...")
-    bonafide_row, spoof_row = pick_example_pair(train_df)
-    print(f"  bonafide: {bonafide_row['filepath']}")
-    print(f"  spoof:    {spoof_row['filepath']} (attack {spoof_row['attack_id']})")
+    if want & {4, 5}:
+        print("Picking a same-speaker bonafide/spoof example pair...")
+        bonafide_row, spoof_row = pick_example_pair(train_df)
+        print(f"  bonafide: {bonafide_row['filepath']}")
+        print(f"  spoof:    {spoof_row['filepath']} (attack {spoof_row['attack_id']})")
 
-    print("Plot 4/7: waveform / STFT spectrogram / CQTgram comparison")
-    plot_waveform_spectrogram_cqt(bonafide_row, spoof_row)
+        if 4 in want:
+            print("Plot 4/7: waveform / STFT spectrogram / CQTgram comparison")
+            plot_waveform_spectrogram_cqt(bonafide_row, spoof_row)
 
-    print("Plot 5/7: MFCC vs CQT comparison (thesis's central empirical argument)")
-    plot_mfcc_vs_cqt(bonafide_row, spoof_row)
+        if 5 in want:
+            print("Plot 5/7: MFCC vs CQT comparison (thesis's central empirical argument)")
+            plot_mfcc_vs_cqt(bonafide_row, spoof_row)
 
-    print("Plot 6/7: speaker count and gender balance per split")
-    plot_speaker_and_gender_balance(train_df, dev_df, gender_map)
+    if 6 in want:
+        print("Plot 6/7: speaker count and gender balance per split")
+        plot_speaker_and_gender_balance(train_df, dev_df, build_gender_map())
 
-    print("Plot 7/7: attack-condition distribution sanity check")
-    plot_attack_condition_distribution(train_df, dev_df)
+    if 7 in want:
+        print("Plot 7/7: attack-condition distribution sanity check")
+        plot_attack_condition_distribution(train_df, dev_df)
 
     print(f"\nAll EDA outputs written to {EDA_DIR}")
 
