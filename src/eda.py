@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import shutil
 import sys
 
 import librosa
@@ -28,6 +29,7 @@ from . import config, resplit
 
 EDA_DIR = config.PROJECT_ROOT / "EDA"
 EDA_DIR.mkdir(parents=True, exist_ok=True)
+SLIKE_SR_DIR = config.PROJECT_ROOT / "Diplomski rad" / "slike"
 
 sns.set_theme(style="whitegrid")
 RNG_SEED = config.RANDOM_SEED
@@ -44,7 +46,7 @@ SR = {
     "Time (s)": "време (s)",
     "Waveform": "сигнал у временском домену",
     "STFT spectrogram (Hz)": "STFT спектрограм (Hz)",
-    "CQTgram": "CQT спектрограм",
+    "CQTgram (Hz)": "CQT спектрограм (Hz)",
     "MFCC coefficient": "MFCC коефицијент",
     "Bonafide": "истински",
     "Spoof": "лажиран",
@@ -291,8 +293,6 @@ def plot_waveform_spectrogram_cqt(bonafide_row, spoof_row):
             stft_db, sr=config.SAMPLE_RATE, hop_length=config.MFCC_HOP_LENGTH,
             x_axis="time", y_axis="hz", ax=axes[1, col],
         )
-        if col == 0:
-            axes[1, col].set_ylabel(_t("STFT spectrogram (Hz)"))
 
         cqt = librosa.cqt(
             y, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
@@ -303,8 +303,13 @@ def plot_waveform_spectrogram_cqt(bonafide_row, spoof_row):
             cqt_db, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
             x_axis="time", y_axis="cqt_hz", bins_per_octave=config.CQT_BINS_PER_OCTAVE, ax=axes[2, col],
         )
-        if col == 0:
-            axes[2, col].set_ylabel(_t("CQTgram"))
+        # specshow writes its own axis labels, in English ("Time", "Hz"), so both are
+        # set again here. Each unit is named once, on the left: a second "Hz" on the
+        # right column only sits between the two panels repeating it.
+        for row in (1, 2):
+            axes[row, col].set_xlabel(_t("Time (s)"))
+        axes[1, col].set_ylabel(_t("STFT spectrogram (Hz)") if col == 0 else "")
+        axes[2, col].set_ylabel(_t("CQTgram (Hz)") if col == 0 else "")
 
     # No suptitle in Serbian: the Typst caption already names the figure, and a
     # sentence across the top only repeats it.
@@ -342,7 +347,6 @@ def plot_mfcc_vs_cqt(bonafide_row, spoof_row):
             f"{label}: MFCC ({config.N_MFCC} коефицијената)" if LANG == "sr"
             else f"{label}: MFCC ({config.N_MFCC} coeffs, z-scored per coeff for display)")
         axes[0, col].set_yticks(range(0, config.N_MFCC, 4))
-        axes[0, col].set_ylabel(_t("MFCC coefficient"))
 
         cqt = librosa.cqt(
             y, sr=config.SAMPLE_RATE, hop_length=config.CQT_HOP_LENGTH,
@@ -356,6 +360,13 @@ def plot_mfcc_vs_cqt(bonafide_row, spoof_row):
         axes[1, col].set_title(
             f"{label}: CQT ({config.CQT_N_BINS} опсега)" if LANG == "sr"
             else f"{label}: CQTgram ({config.CQT_N_BINS} bins)")
+        # As in the figure above: specshow's English labels are replaced, and each
+        # unit is named once, on the left column. The CQT row names the transform
+        # too, since "Hz" alone does not say what is being shown.
+        for row in (0, 1):
+            axes[row, col].set_xlabel(_t("Time (s)"))
+        axes[0, col].set_ylabel(_t("MFCC coefficient") if col == 0 else "")
+        axes[1, col].set_ylabel(_t("CQTgram (Hz)") if col == 0 else "")
 
     if LANG != "sr":
         fig.suptitle("MFCC vs. CQT: does the replay fingerprint survive the front-end?")
@@ -481,6 +492,14 @@ def main():
     if 7 in want:
         print("Plot 7/7: attack-condition distribution sanity check")
         plot_attack_condition_distribution(train_df, dev_df)
+
+    # The Serbian thesis builds from its own slike/ folder, so a --lang sr run puts
+    # its figures there too, the way plot_thesis does for the results figures.
+    if LANG == "sr" and SLIKE_SR_DIR.exists():
+        for n in sorted(want):
+            for p in sorted(EDA_DIR.glob(f"{n:02d}_*_srp.png")):
+                shutil.copyfile(p, SLIKE_SR_DIR / p.name)
+                print(f"  mirrored {p.name} -> {SLIKE_SR_DIR.parent.name}/slike/")
 
     print(f"\nAll EDA outputs written to {EDA_DIR}")
 

@@ -85,12 +85,16 @@ SR = {
     " chance": " случајно",
     # confidence intervals
     "EER (%) with 95% confidence interval": "EER (%) са 95% интервалом поверења",
-    "speaker-clustered (67 speakers)": "груписано по говорницима (67 говорника)",
-    "trial-level (721,332 trials)": "на нивоу покушаја (721.332 покушаја)",
+    # Kept short: at full length these ran over the top rows of the CI forest, and
+    # the unit of each count is already named by the word before it.
+    "speaker-clustered (67 speakers)": "груписано по говорницима (67)",
+    "trial-level (721,332 trials)": "на нивоу покушаја (721.332)",
     "paired difference in EER (percentage points), 95% CI":
         "упарена разлика у EER (процентни поени), 95% CI",
     "excludes zero": "искључује нулу",
     "spans zero": "обухвата нулу",
+    "pre-registered comparisons": "унапред пријављена поређења",
+    "post-hoc comparisons": "накнадна поређења",
     # hidden tracks
     "real replay\n(matched D4/d4)": "стварна репродукција\n(упарено D4/d4)",
     "simulated replay": "симулирана репродукција",
@@ -375,6 +379,20 @@ def fig_dev_vs_target(out: Path) -> Path:
     return _save(fig, out, "10_dev_vs_2021.png")
 
 
+# The fused systems' internal tags mean nothing to a reader of the Serbian text, so
+# they take the names the fusion table in the results chapter uses. Every other
+# system tag stays as it is.
+SR_SYSTEM_NAMES = {
+    "inhouse_fusion_progress": "сопствена фузија, на ознакама",
+    "inhouse_fusion_dev": "сопствена фузија, без ознака",
+    "fusion_ours+2GMM": "фузија са два званична референтна система",
+}
+
+
+def _sysname(tag: str) -> str:
+    return SR_SYSTEM_NAMES.get(tag, tag) if LANG == "sr" else tag
+
+
 def fig_ci_forest(out: Path) -> Path:
     """Speaker-clustered intervals against the conventional trial-level ones."""
     d = pd.read_csv(POSTHOC / "bootstrap_ci_systems.csv")
@@ -397,7 +415,7 @@ def fig_ci_forest(out: Path) -> Path:
 
     ax.axvline(50, color=C_ZERO, linestyle=":", linewidth=1.0)
     ax.text(50, -0.75, _t(" chance"), color=C_ZERO, fontsize=7, va="center")
-    ax.set_yticks(y, order, fontsize=7.5)
+    ax.set_yticks(y, [_sysname(s) for s in order], fontsize=7.5)
     ax.invert_yaxis()
     ax.set_xlabel(_t("EER (%) with 95% confidence interval"))
     ax.grid(axis="x", **GRID)
@@ -408,11 +426,12 @@ def fig_ci_forest(out: Path) -> Path:
     return _save(fig, out, "11_ci_forest.png")
 
 
-# The nine comparisons fixed in writing before the held-out set was scored, with a
-# short label for each. The figure is referenced from the pre-registered section, so
-# it shows only these: folding the post-hoc differences in beside them would blur the
-# separation the whole evaluation protocol rests on. Their numbers are quoted in the
-# post-hoc prose instead.
+# Every paired comparison, each with a Serbian label. The nine fixed in writing before
+# the held-out set was scored are drawn first under their own header and the post-hoc
+# ones below a rule, which keeps all of them on one axis without blurring the
+# separation the evaluation protocol rests on. Post-hoc labels name systems by tag
+# where the tag is exact: timepool_T150_aug is the best post-hoc single system,
+# flatten_T400 the pre-registered primary, CQCC-GMM the strongest official baseline.
 REGISTERED_COMPARISONS = {
     "central claim: CQT-LCNN vs MFCC-SVM":
         "средишња тврдња: CQT-LCNN и MFCC-SVM",
@@ -433,29 +452,68 @@ REGISTERED_COMPARISONS = {
     "pred 3: CMVN transfers better":
         "предвиђање 3: CMVN",
 }
+POSTHOC_COMPARISONS = {
+    "in-house zero-shot fusion vs best official baseline (NOT circular)":
+        "сопствена фузија без ознака и CQCC-GMM",
+    "post-hoc: vs pre-registered primary":
+        "timepool_T150_aug и flatten_T400",
+    "post-hoc: vs best official baseline":
+        "timepool_T150_aug и CQCC-GMM",
+    "post-hoc: vs parent (T150, no augmentation)":
+        "timepool_T150_aug и T150",
+    "in-house fusion (label-fitted): vs the single system":
+        "сопствена фузија на ознакама и појединачни",
+    "in-house ZERO-SHOT fusion: vs the single system":
+        "сопствена фузија без ознака и појединачни",
+    "post-hoc fusion: vs the single system it contains":
+        "фузија са два званична референтна и појединачни",
+    "post-hoc: new best vs previous best":
+        "timepool_T150_aug и flatten_T400_aug",
+    "in-house zero-shot vs the borrowed-partner fusion":
+        "сопствена и позајмљена фузија",
+    "the price of 87,048 labelled target-domain trials":
+        "цена 87.048 означених циљних покушаја",
+}
 
 
 def fig_paired_differences(out: Path) -> Path:
     """Every declared comparison as the CI of the paired difference."""
     d = pd.read_csv(POSTHOC / "bootstrap_ci_comparisons.csv")
-    d = d[d["scheme"] == "speaker-clustered"].copy()
-    d = d[d["comparison"].isin(REGISTERED_COMPARISONS)]
-    d = d.sort_values("eer_diff").reset_index(drop=True)
+    d = d[d["scheme"] == "speaker-clustered"]
+    names = {**REGISTERED_COMPARISONS, **POSTHOC_COMPARISONS}
+    unknown = set(d["comparison"]) - set(names)
+    assert not unknown, f"comparison(s) without a label: {sorted(unknown)}"
 
-    fig, ax = plt.subplots(figsize=(6.6, 0.36 * len(d) + 1.4))
-    for i, r in d.iterrows():
+    reg = d[d["comparison"].isin(REGISTERED_COMPARISONS)].sort_values("eer_diff")
+    post = d[d["comparison"].isin(POSTHOC_COMPARISONS)].sort_values("eer_diff")
+    rows = ([("head", _t("pre-registered comparisons"))]
+            + [("cmp", r) for _, r in reg.iterrows()]
+            + [("head", _t("post-hoc comparisons"))]
+            + [("cmp", r) for _, r in post.iterrows()])
+
+    fig, ax = plt.subplots(figsize=(6.8, 0.30 * len(rows) + 1.2))
+    labels = []
+    for i, (kind, r) in enumerate(rows):
+        if kind == "head":
+            labels.append(r)
+            if i:
+                ax.axhline(i - 0.5, color="#b5b5b5", linewidth=0.7, zorder=1)
+            continue
         sig = bool(r["eer_excludes_zero"])
         col = C_OURS if sig else C_OFFICIAL
         ax.plot([r["eer_lo"], r["eer_hi"]], [i, i], color=col, linewidth=2.4,
                 solid_capstyle="round", zorder=2)
         ax.scatter(r["eer_diff"], i, color="white", edgecolor=col, s=22,
                    linewidth=1.1, zorder=3)
+        labels.append(names[r["comparison"]] if LANG == "sr" else r["comparison"])
     ax.axvline(0, color=C_ZERO, linewidth=1.1, zorder=1)
 
-    labels = [REGISTERED_COMPARISONS[c] if LANG == "sr" else c
-              for c in d["comparison"]]
-    ax.set_yticks(np.arange(len(d)), labels, fontsize=7.5)
-    ax.invert_yaxis()
+    ax.set_yticks(np.arange(len(rows)), labels, fontsize=7.5)
+    for tick, (kind, _) in zip(ax.get_yticklabels(), rows):
+        if kind == "head":
+            tick.set_fontweight("bold")
+    ax.tick_params(axis="y", length=0)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
     ax.set_xlabel(_t("paired difference in EER (percentage points), 95% CI"))
     ax.grid(axis="x", **GRID)
     ax.plot([], [], color=C_OURS, linewidth=2.4, label=_t("excludes zero"))
